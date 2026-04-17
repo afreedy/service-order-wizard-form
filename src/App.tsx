@@ -21,6 +21,9 @@ import { Waste_CategoriesService } from './generated/services/Waste_CategoriesSe
 import { ServiceOrderWasteItemsService } from './generated/services/ServiceOrderWasteItemsService'
 import { ServiceOrderProofQueueService } from './generated/services/ServiceOrderProofQueueService'
 import { ServiceOrdersService } from './generated/services/ServiceOrdersService'
+import { preprocessImageForOcr, runWeightOcr } from './weightOcr'
+import type { CropRect } from './weightOcr'
+import type { ScaleOcrStatus } from './weightOcr'
 import logoImage from './assets/logo.png'
 import './App.css'
 
@@ -65,6 +68,17 @@ interface WasteLine {
   id: string
   WasteCategory: string
   Tonnage: string
+  scalePhotoFile?: File
+  scalePhotoPreviewUrl?: string
+  scaleOcrCropPreviewUrl?: string
+  scaleOcrCrop?: CropRect
+  scaleOcrStatus?: ScaleOcrStatus
+  scaleOcrText?: string
+  scaleOcrSuggestion?: string
+  scaleOcrConfidence?: number
+  scaleOcrReasons?: string[]
+  scaleOcrError?: string
+  scaleOcrRequestId?: string
 }
 
 interface Form {
@@ -225,6 +239,7 @@ const createWasteLine = (): WasteLine => ({
   id: `waste-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
   WasteCategory: '',
   Tonnage: '',
+  scaleOcrStatus: 'idle',
 })
 
 const createBlankForm = (): Form => ({
@@ -248,6 +263,12 @@ const getCompleteWasteLines = (lines: WasteLine[]) => lines.filter(isWasteLineCo
 
 const hasIncompleteWasteLine = (lines: WasteLine[]) =>
   lines.some((line) => hasWasteLineValue(line) && !isWasteLineComplete(line))
+
+const revokeScalePhotoPreviewUrls = (lines: WasteLine[]) => {
+  for (const line of lines) {
+    if (line.scalePhotoPreviewUrl) URL.revokeObjectURL(line.scalePhotoPreviewUrl)
+  }
+}
 
 const STEPS = [
   { label: 'Basic Info', desc: 'Title & date', icon: I.fileTxt },
@@ -1313,16 +1334,235 @@ function ConfirmResetModal({
   )
 }
 
+const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value))
+
+function CropAdjustModal({
+  imageUrl, initialCrop, onCancel, onApply,
+}: {
+  imageUrl: string
+  initialCrop?: CropRect
+  onCancel: () => void
+  onApply: (crop: CropRect) => void
+}) {
+  const [crop, setCrop] = useState<CropRect>(initialCrop ?? { x: 0.2, y: 0.25, width: 0.6, height: 0.35 })
+  const canvasRef = useRef<HTMLCanvasElement | null>(null)
+  const imageRef = useRef<HTMLImageElement | null>(null)
+  const interactionRef = useRef<{
+    mode: 'draw' | 'move' | 'resize'
+    startX: number
+    startY: number
+    startCrop: CropRect
+  } | null>(null)
+
+  const drawCropCanvas = useCallback(() => {
+    const canvas = canvasRef.current
+    const image = imageRef.current
+    const ctx = canvas?.getContext('2d')
+    if (!canvas || !image || !ctx || !image.naturalWidth || !image.naturalHeight) return
+
+    const maxWidth = Math.min(900, Math.max(320, Math.round(window.innerWidth * 0.78)))
+    const maxHeight = Math.min(620, Math.max(260, Math.round(window.innerHeight * 0.58)))
+    const scale = Math.min(maxWidth / image.naturalWidth, maxHeight / image.naturalHeight, 1)
+    const width = Math.max(1, Math.round(image.naturalWidth * scale))
+    const height = Math.max(1, Math.round(image.naturalHeight * scale))
+
+    canvas.width = width
+    canvas.height = height
+    ctx.clearRect(0, 0, width, height)
+    ctx.drawImage(image, 0, 0, width, height)
+
+    const cropX = crop.x * width
+    const cropY = crop.y * height
+    const cropWidth = crop.width * width
+    const cropHeight = crop.height * height
+
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.42)'
+    ctx.fillRect(0, 0, width, cropY)
+    ctx.fillRect(0, cropY + cropHeight, width, height - cropY - cropHeight)
+    ctx.fillRect(0, cropY, cropX, cropHeight)
+    ctx.fillRect(cropX + cropWidth, cropY, width - cropX - cropWidth, cropHeight)
+    ctx.strokeStyle = '#6BBF59'
+    ctx.lineWidth = 2
+    ctx.strokeRect(cropX, cropY, cropWidth, cropHeight)
+    ctx.fillStyle = '#6BBF59'
+    ctx.beginPath()
+    ctx.arc(cropX + cropWidth, cropY + cropHeight, 10, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.strokeStyle = '#fff'
+    ctx.lineWidth = 2
+    ctx.stroke()
+  }, [crop])
+
+  useEffect(() => {
+    const image = new Image()
+    image.onload = () => {
+      imageRef.current = image
+      drawCropCanvas()
+    }
+    image.src = imageUrl
+  }, [drawCropCanvas, imageUrl])
+
+  useEffect(() => {
+    drawCropCanvas()
+  }, [drawCropCanvas])
+
+  useEffect(() => {
+    window.addEventListener('resize', drawCropCanvas)
+    return () => window.removeEventListener('resize', drawCropCanvas)
+  }, [drawCropCanvas])
+
+  const pointerToFrame = (event: PointerEvent<HTMLElement>) => {
+    const canvas = canvasRef.current
+    if (!canvas) return null
+    const rect = canvas.getBoundingClientRect()
+    return {
+      x: (event.clientX - rect.left) / rect.width,
+      y: (event.clientY - rect.top) / rect.height,
+    }
+  }
+
+  const startInteraction = (event: PointerEvent<HTMLElement>, mode: 'move' | 'resize') => {
+    event.preventDefault()
+    event.currentTarget.setPointerCapture(event.pointerId)
+    const point = pointerToFrame(event)
+    if (!point) return
+    interactionRef.current = {
+      mode,
+      startX: point.x,
+      startY: point.y,
+      startCrop: crop,
+    }
+  }
+
+  const startDraw = (event: PointerEvent<HTMLDivElement>) => {
+    if (!(event.target instanceof HTMLCanvasElement)) return
+    event.preventDefault()
+    event.target.setPointerCapture(event.pointerId)
+    const point = pointerToFrame(event)
+    if (!point) return
+    const startCrop = { x: clamp(point.x, 0, 1), y: clamp(point.y, 0, 1), width: 0.01, height: 0.01 }
+    setCrop(startCrop)
+    interactionRef.current = {
+      mode: 'draw',
+      startX: startCrop.x,
+      startY: startCrop.y,
+      startCrop,
+    }
+  }
+
+  const moveInteraction = (event: PointerEvent<HTMLDivElement>) => {
+    const interaction = interactionRef.current
+    const point = pointerToFrame(event)
+    if (!interaction || !point) return
+    event.preventDefault()
+    const dx = point.x - interaction.startX
+    const dy = point.y - interaction.startY
+
+    if (interaction.mode === 'draw') {
+      const x = clamp(Math.min(interaction.startX, point.x), 0, 0.99)
+      const y = clamp(Math.min(interaction.startY, point.y), 0, 0.99)
+      const width = clamp(Math.abs(point.x - interaction.startX), 0.08, 1 - x)
+      const height = clamp(Math.abs(point.y - interaction.startY), 0.08, 1 - y)
+      setCrop({ x, y, width, height })
+      return
+    }
+
+    if (interaction.mode === 'move') {
+      setCrop({
+        ...interaction.startCrop,
+        x: clamp(interaction.startCrop.x + dx, 0, 1 - interaction.startCrop.width),
+        y: clamp(interaction.startCrop.y + dy, 0, 1 - interaction.startCrop.height),
+      })
+      return
+    }
+
+    setCrop({
+      ...interaction.startCrop,
+      width: clamp(interaction.startCrop.width + dx, 0.08, 1 - interaction.startCrop.x),
+      height: clamp(interaction.startCrop.height + dy, 0.08, 1 - interaction.startCrop.y),
+    })
+  }
+
+  const endInteraction = (event: PointerEvent<HTMLDivElement>) => {
+    if (interactionRef.current && event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    }
+    interactionRef.current = null
+  }
+
+  return (
+    <div className="cora-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="crop-adjust-title">
+      <div className="cora-modal cora-crop-modal">
+        <div className="cora-modal-head">
+          <div>
+            <h2 id="crop-adjust-title">Adjust OCR crop</h2>
+            <p>Drag the box around only the scale display, then run OCR again.</p>
+          </div>
+          <button className="cora-modal-close" type="button" onClick={onCancel} aria-label="Close crop editor">
+            {I.x}
+          </button>
+        </div>
+        <div className="cora-modal-body">
+          <div
+            className="cora-crop-frame"
+            onPointerDown={startDraw}
+            onPointerMove={moveInteraction}
+            onPointerUp={endInteraction}
+            onPointerCancel={endInteraction}
+          >
+            <canvas ref={canvasRef} aria-label="Scale crop source" />
+            <div
+              className="cora-crop-box"
+              style={{
+                left: `${crop.x * 100}%`,
+                top: `${crop.y * 100}%`,
+                width: `${crop.width * 100}%`,
+                height: `${crop.height * 100}%`,
+              }}
+              onPointerDown={(event) => {
+                event.stopPropagation()
+                startInteraction(event, 'move')
+              }}
+            >
+              <span
+                className="cora-crop-handle"
+                onPointerDown={(event) => {
+                  event.stopPropagation()
+                  startInteraction(event, 'resize')
+                }}
+              />
+            </div>
+          </div>
+          <p className="cora-field-hint">Drag on the image to draw a new crop. Include the digits and unit, but keep the foot, floor, and empty background out.</p>
+        </div>
+        <div className="cora-modal-foot">
+          <button className="cora-btn cora-btn-outline" type="button" onClick={onCancel}>Cancel</button>
+          <button className="cora-btn cora-btn-primary" type="button" onClick={() => onApply(crop)}>
+            Use crop
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function StepAssignment({
-  form, set, busy, driverOptions, vehicles, categories,
+  form, set, updateForm, busy, driverOptions, vehicles, categories,
 }: {
   form: Form; set: <K extends keyof Form>(k: K, v: Form[K]) => void; busy: boolean
+  updateForm: (updater: (current: Form) => Form) => void
   driverOptions: string[]; vehicles: VehiclesRead[]; categories: Waste_CategoriesRead[]
 }) {
-  const updateWasteLine = (id: string, field: keyof Omit<WasteLine, 'id'>, value: string) => {
-    set('WasteItems', form.WasteItems.map((line) => (
-      line.id === id ? { ...line, [field]: value } : line
-    )))
+  const [cropEditingLineId, setCropEditingLineId] = useState<string | null>(null)
+  const cropEditingLine = form.WasteItems.find((line) => line.id === cropEditingLineId)
+
+  const updateWasteLine = (id: string, changes: Partial<Omit<WasteLine, 'id'>>) => {
+    updateForm((current) => ({
+      ...current,
+      WasteItems: current.WasteItems.map((line) => (
+        line.id === id ? { ...line, ...changes } : line
+      )),
+    }))
   }
 
   const addWasteLine = () => {
@@ -1330,12 +1570,153 @@ function StepAssignment({
   }
 
   const removeWasteLine = (id: string) => {
+    const removedLine = form.WasteItems.find((line) => line.id === id)
+    if (removedLine?.scalePhotoPreviewUrl) URL.revokeObjectURL(removedLine.scalePhotoPreviewUrl)
     const nextLines = form.WasteItems.filter((line) => line.id !== id)
     set('WasteItems', nextLines.length > 0 ? nextLines : [createWasteLine()])
   }
 
+  const clearScalePhoto = (id: string) => {
+    updateForm((current) => ({
+      ...current,
+      WasteItems: current.WasteItems.map((line) => {
+        if (line.id !== id) return line
+        if (line.scalePhotoPreviewUrl) URL.revokeObjectURL(line.scalePhotoPreviewUrl)
+        return {
+          ...line,
+          scalePhotoPreviewUrl: undefined,
+          scalePhotoFile: undefined,
+          scaleOcrCropPreviewUrl: undefined,
+          scaleOcrCrop: undefined,
+          scaleOcrStatus: 'idle',
+          scaleOcrText: undefined,
+          scaleOcrSuggestion: undefined,
+          scaleOcrConfidence: undefined,
+          scaleOcrReasons: undefined,
+          scaleOcrError: undefined,
+          scaleOcrRequestId: undefined,
+        }
+      }),
+    }))
+  }
+
+  const runOcrForLine = async (id: string, file: File, requestId: string, crop?: CropRect) => {
+    try {
+      const preprocessed = await preprocessImageForOcr(file, crop)
+      const result = await runWeightOcr(preprocessed.imageDataUrls, preprocessed.candidateTexts, {
+        remoteImageDataUrl: preprocessed.cropPreviewUrl,
+      })
+      const suggestion = result.reliable ? result.parsed.suggestion : ''
+      updateForm((current) => ({
+        ...current,
+        WasteItems: current.WasteItems.map((line) => {
+          if (line.id !== id || line.scaleOcrRequestId !== requestId) return line
+          return {
+            ...line,
+            scaleOcrStatus: suggestion ? 'done' : 'error',
+            scaleOcrText: result.rawText,
+            scaleOcrSuggestion: suggestion || undefined,
+            scaleOcrConfidence: suggestion ? result.confidence : undefined,
+            scaleOcrReasons: result.reasons,
+            scaleOcrError: suggestion ? undefined : 'Could not confidently read weight. Enter manually.',
+            scaleOcrCropPreviewUrl: preprocessed.cropPreviewUrl,
+            scaleOcrCrop: preprocessed.cropRect,
+          }
+        }),
+      }))
+    } catch (error) {
+      updateForm((current) => ({
+        ...current,
+        WasteItems: current.WasteItems.map((line) => {
+          if (line.id !== id || line.scaleOcrRequestId !== requestId) return line
+          return {
+            ...line,
+            scaleOcrStatus: 'error',
+            scaleOcrConfidence: undefined,
+            scaleOcrReasons: undefined,
+            scaleOcrError: error instanceof Error ? error.message : 'Could not read weight. Enter manually.',
+          }
+        }),
+      }))
+    }
+  }
+
+  const handleScalePhotoChange = async (id: string, event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0] ?? null
+    event.target.value = ''
+    if (!file) return
+    if (!file.type.startsWith('image/')) {
+      updateWasteLine(id, {
+        scaleOcrStatus: 'error',
+        scaleOcrText: undefined,
+        scaleOcrSuggestion: undefined,
+        scaleOcrConfidence: undefined,
+        scaleOcrReasons: undefined,
+        scaleOcrError: 'Choose an image file.',
+      })
+      return
+    }
+
+    const requestId = `scale-ocr-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    const previewUrl = URL.createObjectURL(file)
+    updateForm((current) => ({
+      ...current,
+      WasteItems: current.WasteItems.map((line) => {
+        if (line.id !== id) return line
+        if (line.scalePhotoPreviewUrl) URL.revokeObjectURL(line.scalePhotoPreviewUrl)
+        return {
+          ...line,
+          scalePhotoFile: file,
+          scalePhotoPreviewUrl: previewUrl,
+          scaleOcrStatus: 'idle',
+          scaleOcrText: undefined,
+          scaleOcrSuggestion: undefined,
+          scaleOcrConfidence: undefined,
+          scaleOcrReasons: undefined,
+          scaleOcrError: undefined,
+          scaleOcrCropPreviewUrl: undefined,
+          scaleOcrCrop: undefined,
+          scaleOcrRequestId: requestId,
+        }
+      }),
+    }))
+    setCropEditingLineId(id)
+  }
+
+  const applyScaleCrop = (id: string, crop: CropRect) => {
+    const line = form.WasteItems.find((item) => item.id === id)
+    if (!line?.scalePhotoFile) return
+    const requestId = `scale-ocr-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    setCropEditingLineId(null)
+    updateWasteLine(id, {
+      scaleOcrStatus: 'reading',
+      scaleOcrText: undefined,
+      scaleOcrSuggestion: undefined,
+      scaleOcrConfidence: undefined,
+      scaleOcrReasons: undefined,
+      scaleOcrError: undefined,
+      scaleOcrRequestId: requestId,
+      scaleOcrCrop: crop,
+    })
+    void runOcrForLine(id, line.scalePhotoFile, requestId, crop)
+  }
+
+  const applyScaleSuggestion = (id: string) => {
+    const line = form.WasteItems.find((item) => item.id === id)
+    if (!line?.scaleOcrSuggestion) return
+    updateWasteLine(id, { Tonnage: line.scaleOcrSuggestion })
+  }
+
   return (
     <div className="cora-form-grid" key="step-assign">
+      {cropEditingLine?.scalePhotoPreviewUrl && (
+        <CropAdjustModal
+          imageUrl={cropEditingLine.scalePhotoPreviewUrl}
+          initialCrop={cropEditingLine.scaleOcrCrop}
+          onCancel={() => setCropEditingLineId(null)}
+          onApply={(crop) => applyScaleCrop(cropEditingLine.id, crop)}
+        />
+      )}
       <div className="cora-section-divider"><span>Resource Assignment</span></div>
       <div className="cora-field">
         <label className="cora-label" htmlFor="f-driver">Driver</label>
@@ -1370,7 +1751,7 @@ function StepAssignment({
                 <CustomSelect
                   id={`f-waste-category-${line.id}`}
                   value={line.WasteCategory}
-                  onChange={(val) => updateWasteLine(line.id, 'WasteCategory', val)}
+                  onChange={(val) => updateWasteLine(line.id, { WasteCategory: val })}
                   disabled={busy}
                   placeholder="Select waste category..."
                   options={categories.map((c) => ({ value: c.Title ?? '', label: c.Title ?? `Waste category ${c.ID}` }))}
@@ -1386,9 +1767,77 @@ function StepAssignment({
                   step="0.01"
                   placeholder="e.g. 1.5"
                   value={line.Tonnage}
-                  onChange={(e) => updateWasteLine(line.id, 'Tonnage', e.target.value)}
+                  onChange={(e) => updateWasteLine(line.id, { Tonnage: e.target.value })}
                   disabled={busy}
                 />
+              </div>
+              <div className="cora-field cora-scale-ocr">
+                <label className="cora-label" htmlFor={`f-scale-photo-${line.id}`}>Scale photo</label>
+                {line.scalePhotoPreviewUrl && (
+                  <img className="cora-scale-preview" src={line.scalePhotoPreviewUrl} alt={`Scale photo ${index + 1} preview`} />
+                )}
+                {line.scaleOcrCropPreviewUrl && (
+                  <div className="cora-scale-crop-preview">
+                    <span>OCR crop preview</span>
+                    <img src={line.scaleOcrCropPreviewUrl} alt={`OCR crop preview ${index + 1}`} />
+                  </div>
+                )}
+                <div className="cora-scale-actions">
+                  <label className={`cora-btn cora-btn-secondary ${busy ? 'disabled' : ''}`} htmlFor={`f-scale-photo-${line.id}`}>
+                    {line.scalePhotoPreviewUrl ? 'Replace scale photo' : 'Scan scale'}
+                  </label>
+                  {line.scalePhotoPreviewUrl && (
+                    <button className="cora-btn cora-btn-outline" type="button" onClick={() => setCropEditingLineId(line.id)} disabled={busy}>
+                      Adjust crop
+                    </button>
+                  )}
+                  {line.scalePhotoPreviewUrl && (
+                    <button className="cora-btn cora-btn-outline" type="button" onClick={() => clearScalePhoto(line.id)} disabled={busy}>
+                      Clear
+                    </button>
+                  )}
+                </div>
+                <input
+                  id={`f-scale-photo-${line.id}`}
+                  className="cora-file-input"
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  onChange={(event) => void handleScalePhotoChange(line.id, event)}
+                  disabled={busy}
+                />
+                {line.scaleOcrStatus === 'reading' && <p className="cora-scale-status reading">Reading scale...</p>}
+                {line.scalePhotoPreviewUrl && line.scaleOcrStatus === 'idle' && (
+                  <p className="cora-scale-status reading">Adjust the crop to read the scale.</p>
+                )}
+                {line.scaleOcrStatus === 'done' && line.scaleOcrSuggestion && (
+                  <div className="cora-scale-suggestion">
+                    <p className="cora-scale-status done">
+                      Detected: {line.scaleOcrSuggestion}
+                      {typeof line.scaleOcrConfidence === 'number' ? ` (${Math.round(line.scaleOcrConfidence)}% confidence)` : ''}
+                    </p>
+                    {line.scaleOcrReasons && line.scaleOcrReasons.length > 0 && (
+                      <p className="cora-scale-status reading">{line.scaleOcrReasons.join('. ')}.</p>
+                    )}
+                    <button
+                      className="cora-btn cora-btn-primary"
+                      type="button"
+                      onClick={() => applyScaleSuggestion(line.id)}
+                      disabled={busy || line.Tonnage === line.scaleOcrSuggestion}
+                    >
+                      Use detected value
+                    </button>
+                  </div>
+                )}
+                {line.scaleOcrStatus === 'error' && (
+                  <p className="cora-scale-status error">{line.scaleOcrError || 'Could not read weight. Enter manually.'}</p>
+                )}
+                {line.scaleOcrText && (
+                  <details className="cora-scale-raw">
+                    <summary>OCR text</summary>
+                    <pre>{line.scaleOcrText}</pre>
+                  </details>
+                )}
               </div>
               <button
                 className="cora-btn cora-btn-danger cora-waste-remove"
@@ -1807,6 +2256,7 @@ function App() {
   const [signatureDataUrl, setSignatureDataUrl] = useState('')
   const [beforePhotoFile, setBeforePhotoFile] = useState<File | null>(null)
   const [afterPhotoFile, setAfterPhotoFile] = useState<File | null>(null)
+  const scalePhotoPreviewUrlsRef = useRef<string[]>([])
 
   const loadReferenceData = useCallback(async () => {
     setLoadState('loading')
@@ -1858,6 +2308,18 @@ function App() {
         if (!cancelled) setCurrentUserEmail('')
       })
     return () => { cancelled = true }
+  }, [])
+
+  useEffect(() => {
+    scalePhotoPreviewUrlsRef.current = form.WasteItems
+      .map((line) => line.scalePhotoPreviewUrl)
+      .filter((value): value is string => Boolean(value))
+  }, [form.WasteItems])
+
+  useEffect(() => () => {
+    for (const previewUrl of scalePhotoPreviewUrlsRef.current) {
+      URL.revokeObjectURL(previewUrl)
+    }
   }, [])
 
   /* ── Helpers ── */
@@ -1947,6 +2409,7 @@ function App() {
   }, [afterPhotoPreviewUrl])
 
   const reset = useCallback(() => {
+    revokeScalePhotoPreviewUrls(form.WasteItems)
     setForm(createBlankForm())
     setSignatureDataUrl('')
     setBeforePhotoFile(null)
@@ -1955,7 +2418,7 @@ function App() {
     setStep(0)
     setSubmitted(false)
     setSubmitting(false)
-  }, [])
+  }, [form.WasteItems])
 
   const clearCurrentStepFields = useCallback(() => {
     if (submitting || submitted) return
@@ -1998,6 +2461,7 @@ function App() {
         WasteItems: [createWasteLine()],
         Notes: '',
       }))
+      revokeScalePhotoPreviewUrls(form.WasteItems)
       setToast({ type: 'success', text: 'Assignment fields cleared.' })
       return
     }
@@ -2011,7 +2475,7 @@ function App() {
     }
 
     setToast({ type: 'error', text: 'There are no editable fields to clear on the review page.' })
-  }, [step, submitted, submitting])
+  }, [form.WasteItems, step, submitted, submitting])
 
   const addDriver = useCallback(async (name: string) => {
     const cleaned = name.trim()
@@ -2527,7 +2991,17 @@ function App() {
                           onOpenAdhocModal={() => setAdhocModalOpen(true)}
                         />
                       )}
-                      {step === 2 && <StepAssignment form={form} set={set} busy={submitting} driverOptions={driverOptions} vehicles={vehicles} categories={categories} />}
+                      {step === 2 && (
+                        <StepAssignment
+                          form={form}
+                          set={set}
+                          updateForm={(updater) => setForm(updater)}
+                          busy={submitting}
+                          driverOptions={driverOptions}
+                          vehicles={vehicles}
+                          categories={categories}
+                        />
+                      )}
                       {step === 3 && (
                         <StepProof
                           signatureDataUrl={signatureDataUrl}

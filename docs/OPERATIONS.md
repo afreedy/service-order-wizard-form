@@ -125,6 +125,27 @@ Checks:
 - Confirm the file is an image type.
 - Confirm `service order proof queue` accepts the base64 field sizes currently being written.
 
+### Scale OCR is inaccurate
+
+Scale OCR uses the selected crop, local Tesseract passes, and an optional remote OCR endpoint. If `VITE_WEIGHT_OCR_ENDPOINT` is set, the browser posts the crop image to that endpoint and combines the returned text with local OCR evidence. Keep the OCR service key on the server side; do not put cloud OCR credentials in Vite environment variables.
+
+Expected remote endpoint response shape:
+
+```json
+{
+  "lines": [
+    { "text": "1230 kg", "confidence": 0.94 }
+  ]
+}
+```
+
+Checks:
+
+- Crop tightly around the scale display, including the unit when visible.
+- Confirm detected values are reviewed with the `Use detected value` button; OCR does not write tonnage automatically.
+- Confirm the returned value is within the app's default plausible range of greater than 0 and up to 100 tonnes.
+- If no unit is recognized, the app can still offer a detected value when clean OCR passes agree, but the user must confirm it with `Use detected value`.
+
 ### Proof URLs stay empty
 
 The app queues proof media but does not itself upload files to storage. A downstream processor must:
