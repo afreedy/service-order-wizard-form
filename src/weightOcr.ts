@@ -3,7 +3,7 @@ import Tesseract from 'tesseract.js'
 export type ScaleOcrStatus = 'idle' | 'reading' | 'done' | 'error'
 
 export interface ParsedWeightResult {
-  valueTonnes: number | null
+  displayValue: number | null
   suggestion: string
   rawNumber: string
   unit: 'kg' | 'lb' | 't' | 'unknown' | null
@@ -52,12 +52,10 @@ const MAX_OCR_WIDTH = 2400
 const CONTRAST_FACTOR = 1.55
 const THRESHOLD = 145
 const WHITE_BORDER = 28
-const MIN_PLAUSIBLE_TONNES = 0
-const MAX_PLAUSIBLE_TONNES = 100
+const MIN_PLAUSIBLE_DISPLAY_VALUE = 0
+const MAX_PLAUSIBLE_DISPLAY_VALUE = 100000
 const MIN_RELIABLE_SCORE = 120
 const MIN_RELIABLE_CONFIDENCE = 70
-const UNKNOWN_KG_MIN = MAX_PLAUSIBLE_TONNES
-const UNKNOWN_KG_MAX = MAX_PLAUSIBLE_TONNES * 1000
 
 interface Bbox {
   left: number
@@ -522,19 +520,13 @@ const normalizeNumericText = (value: string) => {
   return cleaned
 }
 
-const formatTonnes = (value: number) => {
+const formatDisplayValue = (value: number) => {
   const rounded = Math.round(value * 1000) / 1000
   return Number.isInteger(rounded) ? String(rounded) : String(rounded).replace(/0+$/, '').replace(/\.$/, '')
 }
 
-const isPlausibleTonnes = (value: number | null) =>
-  value !== null && Number.isFinite(value) && value > MIN_PLAUSIBLE_TONNES && value <= MAX_PLAUSIBLE_TONNES
-
-const isBareKgDisplay = (rawNumber: string) => {
-  if (!rawNumber || /[.,]/.test(rawNumber)) return false
-  const numericValue = Number(normalizeNumericText(rawNumber))
-  return rawNumber.length >= 3 && numericValue > UNKNOWN_KG_MIN && numericValue <= UNKNOWN_KG_MAX
-}
+const isPlausibleDisplayValue = (value: number | null) =>
+  value !== null && Number.isFinite(value) && value > MIN_PLAUSIBLE_DISPLAY_VALUE && value <= MAX_PLAUSIBLE_DISPLAY_VALUE
 
 const parseUnit = (value: string): ParsedWeightResult['unit'] => {
   const lower = value.toLowerCase()
@@ -588,19 +580,12 @@ export const parseWeightFromOcrText = (text: string): ParsedWeightResult => {
 
   const best = candidates[0]
   if (!best) {
-    return { valueTonnes: null, suggestion: '', rawNumber: '', unit: null }
+    return { displayValue: null, suggestion: '', rawNumber: '', unit: null }
   }
 
-  const valueTonnes = best.unit === 'kg'
-    ? best.numericValue / 1000
-    : best.unit === 'lb'
-      ? best.numericValue * 0.00045359237
-      : best.unit === 'unknown' && isBareKgDisplay(best.rawNumber)
-        ? best.numericValue / 1000
-        : best.numericValue
   return {
-    valueTonnes,
-    suggestion: formatTonnes(valueTonnes),
+    displayValue: best.numericValue,
+    suggestion: formatDisplayValue(best.numericValue),
     rawNumber: best.rawNumber,
     unit: best.unit,
   }
@@ -620,19 +605,19 @@ const mergeNumericAndUnitText = (numericText: string, unitText: string) => {
 }
 
 const getAgreementCount = (candidate: OcrCandidate, candidates: OcrCandidate[]) => {
-  const value = candidate.parsed.valueTonnes
+  const value = candidate.parsed.displayValue
   if (value === null) return 0
   return candidates.filter((other) => (
     other !== candidate &&
-    other.parsed.valueTonnes !== null &&
-    Math.abs(other.parsed.valueTonnes - value) <= Math.max(0.005, value * 0.01)
+    other.parsed.displayValue !== null &&
+    Math.abs(other.parsed.displayValue - value) <= Math.max(0.005, value * 0.01)
   )).length
 }
 
 const isCleanUnitlessNumber = (candidate: OcrCandidate) => {
   if (candidate.parsed.unit !== 'unknown' || !candidate.parsed.rawNumber) return false
   const compactText = candidate.text.replace(/\s+/g, '')
-  return compactText === candidate.parsed.rawNumber && isPlausibleTonnes(candidate.parsed.valueTonnes)
+  return compactText === candidate.parsed.rawNumber && isPlausibleDisplayValue(candidate.parsed.displayValue)
 }
 
 const createOcrCandidate = (
@@ -643,16 +628,12 @@ const createOcrCandidate = (
 ): OcrCandidate => {
   const parsed = parseWeightFromOcrText(text)
   const reasons: string[] = []
-  if (!parsed.suggestion || parsed.valueTonnes === null) reasons.push('No parseable number')
+  if (!parsed.suggestion || parsed.displayValue === null) reasons.push('No parseable number')
   const hasUnit = parsed.unit === 'kg' || parsed.unit === 'lb' || parsed.unit === 't'
-  const plausible = isPlausibleTonnes(parsed.valueTonnes)
+  const plausible = isPlausibleDisplayValue(parsed.displayValue)
   if (!hasUnit && parsed.suggestion) reasons.push('Unit was not recognized')
-  if (parsed.valueTonnes !== null && !plausible) {
-    reasons.push(`Outside ${MIN_PLAUSIBLE_TONNES}-${MAX_PLAUSIBLE_TONNES} tonne range`)
-  }
-  const unknownKgDisplay = parsed.unit === 'unknown' && isBareKgDisplay(parsed.rawNumber)
-  if (unknownKgDisplay) {
-    reasons.push('Interpreted bare kg-sized display as tonnes/1000')
+  if (parsed.displayValue !== null && !plausible) {
+    reasons.push(`Outside ${MIN_PLAUSIBLE_DISPLAY_VALUE}-${MAX_PLAUSIBLE_DISPLAY_VALUE} display range`)
   }
 
   const unitScore = hasUnit ? 32 : -16
@@ -670,7 +651,7 @@ const createOcrCandidate = (
 
 const selectBestOcrResult = (candidates: OcrCandidate[], rawTexts: string[]): OcrResult => {
   const usableCandidates = candidates
-    .filter((candidate) => candidate.parsed.suggestion && isPlausibleTonnes(candidate.parsed.valueTonnes))
+    .filter((candidate) => candidate.parsed.suggestion && isPlausibleDisplayValue(candidate.parsed.displayValue))
     .map((candidate) => {
       const agreementCount = getAgreementCount(candidate, candidates)
       const agreementBonusCount = Math.min(agreementCount, 3)
@@ -708,7 +689,7 @@ const selectBestOcrResult = (candidates: OcrCandidate[], rawTexts: string[]): Oc
   const parsed = parseWeightFromOcrText(rawTexts.join('\n'))
   return {
     rawText,
-    parsed: isPlausibleTonnes(parsed.valueTonnes) ? parsed : { valueTonnes: null, suggestion: '', rawNumber: '', unit: null },
+    parsed: isPlausibleDisplayValue(parsed.displayValue) ? parsed : { displayValue: null, suggestion: '', rawNumber: '', unit: null },
     reliable: false,
     requiresConfirmation: Boolean(parsed.suggestion),
     confidence: 0,

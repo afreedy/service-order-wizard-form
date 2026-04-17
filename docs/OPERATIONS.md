@@ -143,7 +143,7 @@ Checks:
 
 - Crop tightly around the scale display, including the unit when visible.
 - Confirm detected values are reviewed with the `Use detected value` button; OCR does not write tonnage automatically.
-- Confirm the returned value is within the app's default plausible range of greater than 0 and up to 100 tonnes.
+- Confirm the returned value is within the app's default plausible display range of greater than 0 and up to 100000.
 - If no unit is recognized, the app can still offer a detected value when clean OCR passes agree, but the user must confirm it with `Use detected value`.
 
 ### Proof URLs stay empty
