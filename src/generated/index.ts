@@ -7,6 +7,7 @@
 export * as CommonModels from './models/CommonModels';
 export * as Customer_area_dataModel from './models/Customer_area_dataModel';
 export * as Customer_area_data_cleanModel from './models/Customer_area_data_cleanModel';
+export * as Customer_area_data_clean_finalModel from './models/Customer_area_data_clean_finalModel';
 export * as Drivers1Model from './models/Drivers1Model';
 export * as DriversModel from './models/DriversModel';
 export * as ServiceOrderProofQueueModel from './models/ServiceOrderProofQueueModel';
@@ -19,6 +20,7 @@ export * as Waste_CategoriesModel from './models/Waste_CategoriesModel';
 // Services
 export * from './services/Customer_area_dataService';
 export * from './services/Customer_area_data_cleanService';
+export * from './services/Customer_area_data_clean_finalService';
 export * from './services/Drivers1Service';
 export * from './services/DriversService';
 export * from './services/ServiceOrderProofQueueService';

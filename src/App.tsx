@@ -8,14 +8,14 @@ import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import type { ChangeEvent, DragEvent, PointerEvent, ReactNode } from 'react'
 import { getContext } from '@microsoft/power-apps/app'
 import type { Drivers1Read } from './generated/models/Drivers1Model'
-import type { Customer_area_data_cleanRead } from './generated/models/Customer_area_data_cleanModel'
+import type { Customer_area_data_clean_finalRead } from './generated/models/Customer_area_data_clean_finalModel'
 import type { VehiclesRead, VehiclesWrite } from './generated/models/VehiclesModel'
 import type { Waste_CategoriesRead, Waste_CategoriesWrite } from './generated/models/Waste_CategoriesModel'
 import type { ServiceOrderWasteItemsRead, ServiceOrderWasteItemsWrite } from './generated/models/ServiceOrderWasteItemsModel'
 import type { ServiceOrderProofQueueRead, ServiceOrderProofQueueWrite } from './generated/models/ServiceOrderProofQueueModel'
 import type { ServiceOrdersRead, ServiceOrdersWrite } from './generated/models/ServiceOrdersModel'
 import { Drivers1Service } from './generated/services/Drivers1Service'
-import { Customer_area_data_cleanService } from './generated/services/Customer_area_data_cleanService'
+import { Customer_area_data_clean_finalService } from './generated/services/Customer_area_data_clean_finalService'
 import { VehiclesService } from './generated/services/VehiclesService'
 import { Waste_CategoriesService } from './generated/services/Waste_CategoriesService'
 import { ServiceOrderWasteItemsService } from './generated/services/ServiceOrderWasteItemsService'
@@ -70,6 +70,8 @@ interface WasteLine {
 interface Form {
   Title: string; Customer: string; CustomerName: string
   CustomerLocation: string; CustomerTenant: string
+  CustomerLevel4: string; CustomerLevel5: string; CustomerLevel6: string; CustomerLevel7: string
+  CustomerLevel8: string; CustomerLevel9: string; CustomerLevel10: string
   IsAdhocCustomer: boolean; DriverName: string
   VehicleNumber: string; DateOfCollection: string
   WasteItems: WasteLine[]
@@ -96,7 +98,31 @@ interface ProofUploadResponse {
 }
 
 type DriverOptionSource = Drivers1Read
-type CustomerAreaOption = Customer_area_data_cleanRead
+type CustomerAreaOption = Customer_area_data_clean_finalRead
+type CustomerLevelField =
+  | 'CustomerName'
+  | 'CustomerLocation'
+  | 'CustomerTenant'
+  | 'CustomerLevel4'
+  | 'CustomerLevel5'
+  | 'CustomerLevel6'
+  | 'CustomerLevel7'
+  | 'CustomerLevel8'
+  | 'CustomerLevel9'
+  | 'CustomerLevel10'
+
+const CUSTOMER_LEVELS: { key: CustomerLevelField; label: string; placeholder: string; searchPlaceholder: string }[] = [
+  { key: 'CustomerName', label: 'Customer', placeholder: 'Select customer…', searchPlaceholder: 'Search customers...' },
+  { key: 'CustomerLocation', label: 'Location', placeholder: 'Select location…', searchPlaceholder: 'Search locations...' },
+  { key: 'CustomerTenant', label: 'Sub-location', placeholder: 'Select sub-location…', searchPlaceholder: 'Search sub-locations...' },
+  { key: 'CustomerLevel4', label: 'Level 4', placeholder: 'Select level 4…', searchPlaceholder: 'Search level 4...' },
+  { key: 'CustomerLevel5', label: 'Level 5', placeholder: 'Select level 5…', searchPlaceholder: 'Search level 5...' },
+  { key: 'CustomerLevel6', label: 'Level 6', placeholder: 'Select level 6…', searchPlaceholder: 'Search level 6...' },
+  { key: 'CustomerLevel7', label: 'Level 7', placeholder: 'Select level 7…', searchPlaceholder: 'Search level 7...' },
+  { key: 'CustomerLevel8', label: 'Level 8', placeholder: 'Select level 8…', searchPlaceholder: 'Search level 8...' },
+  { key: 'CustomerLevel9', label: 'Level 9', placeholder: 'Select level 9…', searchPlaceholder: 'Search level 9...' },
+  { key: 'CustomerLevel10', label: 'Level 10', placeholder: 'Select level 10…', searchPlaceholder: 'Search level 10...' },
+]
 
 const ADMIN_EMAILS = [
   'bizdev@cora-environment.com',
@@ -114,14 +140,15 @@ const getDriverName = (row: DriverOptionSource) => {
 }
 
 const uniqueValues = (values: string[]) => Array.from(new Set(values.filter(Boolean)))
+const readString = (value: unknown) => (typeof value === 'string' ? value.trim() : '')
 
 const getCustomerName = (row: CustomerAreaOption) => row.Title?.trim() || ''
 const getCustomerArea = (row: CustomerAreaOption) => {
   const dynamicRow = row as Record<string, unknown>
   const candidate = dynamicRow.Area ?? dynamicRow.field_1
-  return typeof candidate === 'string' ? candidate.trim() : ''
+  return readString(candidate)
 }
-const getCustomerSubLocation = (row: CustomerAreaOption) => {
+const getCustomerSubLocationRaw = (row: CustomerAreaOption) => {
   const dynamicRow = row as Record<string, unknown>
   const candidate =
     dynamicRow.SubLocation ??
@@ -136,7 +163,51 @@ const getCustomerSubLocation = (row: CustomerAreaOption) => {
     dynamicRow.LocationLevel3 ??
     dynamicRow.Level3 ??
     dynamicRow.CustomerTenant
-  return typeof candidate === 'string' ? candidate.trim() : ''
+  return readString(candidate)
+}
+const getCustomerSubLocationParts = (row: CustomerAreaOption) =>
+  getCustomerSubLocationRaw(row)
+    .split('/')
+    .map((part) => part.trim())
+    .filter(Boolean)
+
+const getCustomerLevelValue = (row: CustomerAreaOption, levelIndex: number) => {
+  const dynamicRow = row as Record<string, unknown>
+  if (levelIndex === 0) return getCustomerName(row)
+  if (levelIndex === 1) return getCustomerArea(row)
+  const splitSubLocation = getCustomerSubLocationParts(row)
+  if (levelIndex === 2) return splitSubLocation[0] ?? ''
+  const levelNumber = levelIndex + 1
+  const candidate =
+    dynamicRow[`Level${levelNumber}`] ??
+    dynamicRow[`LocationLevel${levelNumber}`] ??
+    dynamicRow[`CustomerLevel${levelNumber}`] ??
+    dynamicRow[`field_${levelIndex}`]
+  return readString(candidate) || splitSubLocation[levelIndex - 2] || ''
+}
+
+const getFormCustomerLevelValue = (form: Form, levelIndex: number) =>
+  String(form[CUSTOMER_LEVELS[levelIndex].key] ?? '').trim()
+
+const rowMatchesCustomerPath = (row: CustomerAreaOption, form: Form, upToLevelIndex: number) => {
+  for (let i = 0; i < upToLevelIndex; i += 1) {
+    const selected = getFormCustomerLevelValue(form, i)
+    if (!selected || getCustomerLevelValue(row, i) !== selected) return false
+  }
+  return true
+}
+
+const getCustomerLevelOptions = (rows: CustomerAreaOption[], form: Form, levelIndex: number) => {
+  if (levelIndex > 0) {
+    for (let i = 0; i < levelIndex; i += 1) {
+      if (!getFormCustomerLevelValue(form, i)) return []
+    }
+  }
+  return uniqueValues(
+    rows
+      .filter((row) => rowMatchesCustomerPath(row, form, levelIndex))
+      .map((row) => getCustomerLevelValue(row, levelIndex)),
+  ).sort((a, b) => a.localeCompare(b))
 }
 
 const pad = (value: number) => String(value).padStart(2, '0')
@@ -158,7 +229,8 @@ const createWasteLine = (): WasteLine => ({
 
 const createBlankForm = (): Form => ({
   Title: generateOrderTitle(), Customer: '', CustomerName: '', CustomerLocation: '',
-  CustomerTenant: '', IsAdhocCustomer: false, DriverName: '',
+  CustomerTenant: '', CustomerLevel4: '', CustomerLevel5: '', CustomerLevel6: '', CustomerLevel7: '',
+  CustomerLevel8: '', CustomerLevel9: '', CustomerLevel10: '', IsAdhocCustomer: false, DriverName: '',
   VehicleNumber: '', DateOfCollection: formatDateInputValue(new Date()), WasteItems: [createWasteLine()],
   Notes: '',
 }
@@ -965,92 +1037,44 @@ function StepCustomer({
   customerAreas: CustomerAreaOption[]
   onOpenAdhocModal: () => void
 }) {
-  const customerOptions = uniqueValues(customerAreas.map(getCustomerName)).sort((a, b) => a.localeCompare(b))
-  const locationOptions = uniqueValues(
-    customerAreas
-      .filter((option) => getCustomerName(option) === form.CustomerName)
-      .map(getCustomerArea),
-  ).sort((a, b) => a.localeCompare(b))
-  const subLocationOptions = uniqueValues(
-    customerAreas
-      .filter((option) => getCustomerName(option) === form.CustomerName && getCustomerArea(option) === form.CustomerLocation)
-      .map(getCustomerSubLocation),
-  ).sort((a, b) => a.localeCompare(b))
-  const shouldShowLocation = Boolean(form.CustomerName && locationOptions.length > 0)
-  const shouldShowSubLocation = Boolean(form.CustomerLocation && subLocationOptions.length > 0)
+  const levelOptions = CUSTOMER_LEVELS.map((_, levelIndex) => getCustomerLevelOptions(customerAreas, form, levelIndex))
+  const visibleLevels = CUSTOMER_LEVELS.filter((_, levelIndex) => levelIndex === 0 || levelOptions[levelIndex].length > 0)
 
-  const chooseCustomer = (customer: string) => {
-    set('IsAdhocCustomer', false)
-    set('Customer', customer)
-    set('CustomerName', customer)
-    set('CustomerLocation', '')
-    set('CustomerTenant', '')
+  const chooseLevel = (levelIndex: number, value: string) => {
+    const level = CUSTOMER_LEVELS[levelIndex]
+    set(level.key, value)
+    if (levelIndex === 0) {
+      set('IsAdhocCustomer', false)
+      set('Customer', value)
+    }
+    CUSTOMER_LEVELS.slice(levelIndex + 1).forEach((childLevel) => {
+      set(childLevel.key, '')
+    })
   }
-
-  const chooseLocation = (location: string) => {
-    const matchingSubLocations = uniqueValues(
-      customerAreas
-        .filter((option) => getCustomerName(option) === form.CustomerName && getCustomerArea(option) === location)
-        .map(getCustomerSubLocation),
-    )
-    set('CustomerLocation', location)
-    set('CustomerTenant', matchingSubLocations.length === 1 ? matchingSubLocations[0] : '')
-  }
-
-  const chooseSubLocation = (subLocation: string) => {
-    set('CustomerTenant', subLocation)
-  }
-
-  const selectedCustomer = customerOptions.includes(form.CustomerName) ? form.CustomerName : ''
-  const selectedLocation = locationOptions.includes(form.CustomerLocation) ? form.CustomerLocation : ''
-  const selectedSubLocation = subLocationOptions.includes(form.CustomerTenant) ? form.CustomerTenant : ''
 
   return (
     <div className="cora-form-grid" key="step-customer">
       <div className="cora-section-divider"><span>Customer Details</span></div>
-      <div className="cora-field">
-        <label className="cora-label" htmlFor="f-cust-select">Customer</label>
-        <CustomSelect
-          id="f-cust-select"
-          value={selectedCustomer}
-          onChange={(val) => chooseCustomer(val)}
-          disabled={busy}
-          placeholder="Select customer…"
-          searchable
-          searchPlaceholder="Search customers..."
-          options={customerOptions.map((customer) => ({ value: customer, label: customer }))}
-        />
-      </div>
-      {shouldShowLocation && (
-        <div className="cora-field">
-          <label className="cora-label" htmlFor="f-cloc-select">Location</label>
-          <CustomSelect
-            id="f-cloc-select"
-            value={selectedLocation}
-            onChange={(val) => chooseLocation(val)}
-            disabled={busy}
-            placeholder="Select location…"
-            searchable
-            searchPlaceholder="Search locations..."
-            options={locationOptions.map((location) => ({ value: location, label: location }))}
-          />
-        </div>
-      )}
-      {shouldShowSubLocation && (
-        <div className="cora-field">
-          <label className="cora-label" htmlFor="f-ctenant-select">Sub-location</label>
-          <CustomSelect
-            id="f-ctenant-select"
-            value={selectedSubLocation}
-            onChange={(val) => chooseSubLocation(val)}
-            disabled={busy}
-            placeholder="Select sub-location…"
-            searchable
-            searchPlaceholder="Search sub-locations..."
-            options={subLocationOptions.map((subLocation) => ({ value: subLocation, label: subLocation }))}
-          />
-        </div>
-      )}
+      {visibleLevels.map((level) => {
+        const levelIndex = CUSTOMER_LEVELS.indexOf(level)
+        const options = levelOptions[levelIndex]
+        const selectedValue = options.includes(form[level.key]) ? form[level.key] : ''
+        return (
+          <div className="cora-field" key={level.key}>
+            <label className="cora-label" htmlFor={`f-customer-level-${levelIndex + 1}`}>{level.label}</label>
+            <CustomSelect
+              id={`f-customer-level-${levelIndex + 1}`}
+              value={selectedValue}
+              onChange={(val) => chooseLevel(levelIndex, val)}
+              disabled={busy}
+              placeholder={level.placeholder}
+              searchable
+              searchPlaceholder={level.searchPlaceholder}
+              options={options.map((option) => ({ value: option, label: option }))}
+            />
+          </div>
+        )
+      })}
       <div className="cora-field">
         <label className="cora-label">Ad-hoc Customer</label>
         <div className="cora-switch-row">
@@ -1662,12 +1686,16 @@ function StepReview({
 }) {
   const completeWasteLines = getCompleteWasteLines(form.WasteItems)
   const totalTonnage = completeWasteLines.reduce((sum, line) => sum + Number(line.Tonnage), 0)
+  const customerLevelRows: [string, string][] = CUSTOMER_LEVELS
+    .map((level, levelIndex): [string, string] => [
+      levelIndex === 0 ? 'Customer Name' : level.label,
+      form[level.key] || '—',
+    ])
+    .filter(([, value], levelIndex) => levelIndex < 3 || value !== '—')
   const rows: [string, string][] = [
     ['Title', form.Title || '—'],
     ['Collection Date', form.DateOfCollection || '—'],
-    ['Customer Name', form.CustomerName || '—'],
-    ['Location', form.CustomerLocation || '—'],
-    ['Sub-location', form.CustomerTenant || '—'],
+    ...customerLevelRows,
     ['Ad-hoc', form.IsAdhocCustomer ? 'Yes' : 'No'],
     ['Driver', form.DriverName || '—'],
     ['Vehicle', form.VehicleNumber || '—'],
@@ -1790,9 +1818,9 @@ function App() {
 
     try {
       const loadCustomers = async () => {
-        const clean = await Customer_area_data_cleanService.getAll({ top: 5000 })
+        const clean = await Customer_area_data_clean_finalService.getAll({ top: 5000 })
         if (!clean.data || !Array.isArray(clean.data) || clean.data.length === 0) {
-          throw new Error('The customer-area-data-clean list returned no customer rows.')
+          throw new Error('The customer-area-data-clean-final list returned no customer rows.')
         }
         return clean.data
       }
@@ -1948,6 +1976,13 @@ function App() {
         CustomerName: '',
         CustomerLocation: '',
         CustomerTenant: '',
+        CustomerLevel4: '',
+        CustomerLevel5: '',
+        CustomerLevel6: '',
+        CustomerLevel7: '',
+        CustomerLevel8: '',
+        CustomerLevel9: '',
+        CustomerLevel10: '',
         IsAdhocCustomer: false,
       }))
       setAdhocModalOpen(false)
@@ -2120,6 +2155,13 @@ function App() {
       CustomerName: values.CustomerName,
       CustomerLocation: values.CustomerLocation,
       CustomerTenant: values.CustomerTenant,
+      CustomerLevel4: '',
+      CustomerLevel5: '',
+      CustomerLevel6: '',
+      CustomerLevel7: '',
+      CustomerLevel8: '',
+      CustomerLevel9: '',
+      CustomerLevel10: '',
       IsAdhocCustomer: true,
     }))
     setAdhocModalOpen(false)
@@ -2133,22 +2175,11 @@ function App() {
     const customerExists = customerAreas.some((option) => getCustomerName(option) === customerName)
     if (!customerExists) return 'Please select a customer from the list before continuing.'
 
-    const locationOptions = uniqueValues(
-      customerAreas
-        .filter((option) => getCustomerName(option) === customerName)
-        .map(getCustomerArea),
-    )
-    if (locationOptions.length > 0 && !form.CustomerLocation.trim()) {
-      return 'Please select a location before continuing.'
-    }
-
-    const subLocationOptions = uniqueValues(
-      customerAreas
-        .filter((option) => getCustomerName(option) === customerName && getCustomerArea(option) === form.CustomerLocation)
-        .map(getCustomerSubLocation),
-    )
-    if (subLocationOptions.length > 0 && !form.CustomerTenant.trim()) {
-      return 'Please select a sub-location before continuing.'
+    for (let levelIndex = 1; levelIndex < CUSTOMER_LEVELS.length; levelIndex += 1) {
+      const options = getCustomerLevelOptions(customerAreas, form, levelIndex)
+      if (options.length > 0 && !getFormCustomerLevelValue(form, levelIndex)) {
+        return `Please select ${CUSTOMER_LEVELS[levelIndex].label.toLowerCase()} before continuing.`
+      }
     }
 
     return ''
@@ -2255,6 +2286,13 @@ function App() {
         CustomerName: form.CustomerName || undefined,
         CustomerLocation: form.CustomerLocation || undefined,
         CustomerTenant: form.CustomerTenant || undefined,
+        CustomerLevel4: form.CustomerLevel4 || undefined,
+        CustomerLevel5: form.CustomerLevel5 || undefined,
+        CustomerLevel6: form.CustomerLevel6 || undefined,
+        CustomerLevel7: form.CustomerLevel7 || undefined,
+        CustomerLevel8: form.CustomerLevel8 || undefined,
+        CustomerLevel9: form.CustomerLevel9 || undefined,
+        CustomerLevel10: form.CustomerLevel10 || undefined,
         IsAdhocCustomer: form.IsAdhocCustomer,
         DriverName: form.DriverName || undefined,
         VehicleNumber: form.VehicleNumber || undefined,

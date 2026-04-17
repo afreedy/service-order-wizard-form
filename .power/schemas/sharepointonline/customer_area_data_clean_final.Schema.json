@@ -1,12 +1,11 @@
 {
-  "name": "1fedd0f5-2c94-441d-9c95-1559fc2dbb3f",
-  "title": "Service Orders",
+  "name": "405526ea-7b2b-493c-a370-ba8242a2c264",
+  "title": "customer-area-data-clean-final",
   "x-ms-permission": "read-write",
   "x-ms-capabilities": {
     "sortRestrictions": {
       "sortable": true,
       "unsortableProperties": [
-        "Notes",
         "{Identifier}",
         "{IsFolder}",
         "{Thumbnail}",
@@ -28,11 +27,6 @@
     "filterRestrictions": {
       "filterable": true,
       "nonFilterableProperties": [
-        "ReceiptUrl",
-        "SignatureUrl",
-        "BeforePhotoUrl",
-        "AfterPhotoUrl",
-        "Notes",
         "{Identifier}",
         "{IsFolder}",
         "{Thumbnail}",
@@ -103,8 +97,8 @@
           },
           "maxLength": 255
         },
-        "Customer": {
-          "title": "Email",
+        "field_1": {
+          "title": "Area",
           "type": "string",
           "x-ms-permission": "read-write",
           "x-ms-sort": "asc,desc",
@@ -116,25 +110,8 @@
           },
           "maxLength": 255
         },
-        "FormCompletionTime": {
-          "title": "FormCompletionTime",
-          "type": "string",
-          "format": "date-time",
-          "x-ms-permission": "read-write",
-          "x-ms-sort": "asc,desc",
-          "x-ms-capabilities": {
-            "filterFunctions": [
-              "eq",
-              "gt",
-              "ge",
-              "lt",
-              "le",
-              "ne"
-            ]
-          }
-        },
-        "CustomerName": {
-          "title": "CustomerName",
+        "field_2": {
+          "title": "SubLocation",
           "type": "string",
           "x-ms-permission": "read-write",
           "x-ms-sort": "asc,desc",
@@ -146,8 +123,8 @@
           },
           "maxLength": 255
         },
-        "CustomerLocation": {
-          "title": "CustomerLocation",
+        "field_3": {
+          "title": "Level4",
           "type": "string",
           "x-ms-permission": "read-write",
           "x-ms-sort": "asc,desc",
@@ -159,8 +136,8 @@
           },
           "maxLength": 255
         },
-        "CustomerTenant": {
-          "title": "CustomerTenant",
+        "field_4": {
+          "title": "Level5",
           "type": "string",
           "x-ms-permission": "read-write",
           "x-ms-sort": "asc,desc",
@@ -172,20 +149,8 @@
           },
           "maxLength": 255
         },
-        "IsAdhocCustomer": {
-          "title": "IsAdhocCustomer",
-          "type": "boolean",
-          "x-ms-permission": "read-write",
-          "x-ms-sort": "asc,desc",
-          "x-ms-capabilities": {
-            "filterFunctions": [
-              "eq"
-            ]
-          },
-          "default": true
-        },
-        "DriverName": {
-          "title": "DriverName",
+        "field_5": {
+          "title": "Level6",
           "type": "string",
           "x-ms-permission": "read-write",
           "x-ms-sort": "asc,desc",
@@ -197,8 +162,8 @@
           },
           "maxLength": 255
         },
-        "VehicleNumber": {
-          "title": "VehicleNumber",
+        "field_6": {
+          "title": "Level7",
           "type": "string",
           "x-ms-permission": "read-write",
           "x-ms-sort": "asc,desc",
@@ -210,59 +175,8 @@
           },
           "maxLength": 255
         },
-        "DateOfCollection": {
-          "title": "DateOfCollection",
-          "type": "string",
-          "format": "date",
-          "x-ms-permission": "read-write",
-          "x-ms-sort": "asc,desc",
-          "x-ms-capabilities": {
-            "filterFunctions": [
-              "eq",
-              "gt",
-              "ge",
-              "lt",
-              "le",
-              "ne"
-            ]
-          }
-        },
-        "ReceiptUrl": {
-          "title": "ReceiptUrl",
-          "type": "string",
-          "format": "uri",
-          "x-ms-permission": "read-write",
-          "x-ms-sort": "asc,desc"
-        },
-        "SignatureUrl": {
-          "title": "SignatureUrl",
-          "type": "string",
-          "format": "uri",
-          "x-ms-permission": "read-write",
-          "x-ms-sort": "asc,desc"
-        },
-        "BeforePhotoUrl": {
-          "title": "BeforePhotoUrl",
-          "type": "string",
-          "format": "uri",
-          "x-ms-permission": "read-write",
-          "x-ms-sort": "asc,desc"
-        },
-        "AfterPhotoUrl": {
-          "title": "AfterPhotoUrl",
-          "type": "string",
-          "format": "uri",
-          "x-ms-permission": "read-write",
-          "x-ms-sort": "asc,desc"
-        },
-        "Notes": {
-          "title": "Notes",
-          "type": "string",
-          "x-ms-permission": "read-write",
-          "x-ms-sort": "none"
-        },
-        "WasteCategory": {
-          "title": "WasteCategory",
+        "field_7": {
+          "title": "Level8",
           "type": "string",
           "x-ms-permission": "read-write",
           "x-ms-sort": "asc,desc",
@@ -274,27 +188,8 @@
           },
           "maxLength": 255
         },
-        "Tonnage": {
-          "title": "Tonnage",
-          "type": "number",
-          "format": "double",
-          "x-ms-permission": "read-write",
-          "x-ms-sort": "asc,desc",
-          "x-ms-capabilities": {
-            "filterFunctions": [
-              "eq",
-              "gt",
-              "ge",
-              "lt",
-              "le",
-              "ne"
-            ]
-          },
-          "maximum": 1.7976931348623157e+308,
-          "minimum": -1.7976931348623157e+308
-        },
-        "CustomerLevel4": {
-          "title": "CustomerLevel4",
+        "field_8": {
+          "title": "Level9",
           "type": "string",
           "x-ms-permission": "read-write",
           "x-ms-sort": "asc,desc",
@@ -306,73 +201,8 @@
           },
           "maxLength": 255
         },
-        "CustomerLevel5": {
-          "title": "CustomerLevel5",
-          "type": "string",
-          "x-ms-permission": "read-write",
-          "x-ms-sort": "asc,desc",
-          "x-ms-capabilities": {
-            "filterFunctions": [
-              "eq",
-              "startswith"
-            ]
-          },
-          "maxLength": 255
-        },
-        "CustomerLevel6": {
-          "title": "CustomerLevel6",
-          "type": "string",
-          "x-ms-permission": "read-write",
-          "x-ms-sort": "asc,desc",
-          "x-ms-capabilities": {
-            "filterFunctions": [
-              "eq",
-              "startswith"
-            ]
-          },
-          "maxLength": 255
-        },
-        "CustomerLevel7": {
-          "title": "CustomerLevel7",
-          "type": "string",
-          "x-ms-permission": "read-write",
-          "x-ms-sort": "asc,desc",
-          "x-ms-capabilities": {
-            "filterFunctions": [
-              "eq",
-              "startswith"
-            ]
-          },
-          "maxLength": 255
-        },
-        "CustomerLevel8": {
-          "title": "CustomerLevel8",
-          "type": "string",
-          "x-ms-permission": "read-write",
-          "x-ms-sort": "asc,desc",
-          "x-ms-capabilities": {
-            "filterFunctions": [
-              "eq",
-              "startswith"
-            ]
-          },
-          "maxLength": 255
-        },
-        "CustomerLevel9": {
-          "title": "CustomerLevel9",
-          "type": "string",
-          "x-ms-permission": "read-write",
-          "x-ms-sort": "asc,desc",
-          "x-ms-capabilities": {
-            "filterFunctions": [
-              "eq",
-              "startswith"
-            ]
-          },
-          "maxLength": 255
-        },
-        "CustomerLevel10": {
-          "title": "CustomerLevel10",
+        "field_9": {
+          "title": "Level10",
           "type": "string",
           "x-ms-permission": "read-write",
           "x-ms-sort": "asc,desc",
@@ -907,82 +737,40 @@
       "x-ms-displayFormat": {
         "propertiesDisplayOrder": [
           "Title",
-          "Customer",
-          "CustomerLocation",
-          "DriverName",
-          "VehicleNumber",
-          "FormCompletionTime",
-          "CustomerName",
-          "CustomerTenant",
-          "IsAdhocCustomer",
-          "DateOfCollection",
-          "ReceiptUrl",
-          "SignatureUrl",
-          "BeforePhotoUrl",
-          "AfterPhotoUrl",
-          "Notes",
-          "WasteCategory",
-          "Tonnage",
-          "CustomerLevel4",
-          "CustomerLevel5",
-          "CustomerLevel6",
-          "CustomerLevel7",
-          "CustomerLevel8",
-          "CustomerLevel9",
-          "CustomerLevel10",
+          "field_1",
+          "field_2",
+          "field_3",
+          "field_4",
+          "field_5",
+          "field_6",
+          "field_7",
+          "field_8",
+          "field_9",
           "{Attachments}"
         ],
         "propertiesCompactDisplayOrder": [
           "Title",
-          "Customer",
-          "FormCompletionTime",
-          "CustomerName",
-          "CustomerLocation",
-          "CustomerTenant",
-          "IsAdhocCustomer",
-          "DriverName",
-          "VehicleNumber",
-          "DateOfCollection",
-          "ReceiptUrl",
-          "SignatureUrl",
-          "BeforePhotoUrl",
-          "AfterPhotoUrl",
-          "Notes",
-          "WasteCategory",
-          "Tonnage",
-          "CustomerLevel4",
-          "CustomerLevel5",
-          "CustomerLevel6",
-          "CustomerLevel7",
-          "CustomerLevel8",
-          "CustomerLevel9",
-          "CustomerLevel10"
+          "field_1",
+          "field_2",
+          "field_3",
+          "field_4",
+          "field_5",
+          "field_6",
+          "field_7",
+          "field_8",
+          "field_9"
         ],
         "propertiesTabularDisplayOrder": [
           "Title",
-          "Customer",
-          "FormCompletionTime",
-          "CustomerName",
-          "CustomerLocation",
-          "CustomerTenant",
-          "IsAdhocCustomer",
-          "DriverName",
-          "VehicleNumber",
-          "DateOfCollection",
-          "ReceiptUrl",
-          "SignatureUrl",
-          "BeforePhotoUrl",
-          "AfterPhotoUrl",
-          "Notes",
-          "WasteCategory",
-          "Tonnage",
-          "CustomerLevel4",
-          "CustomerLevel5",
-          "CustomerLevel6",
-          "CustomerLevel7",
-          "CustomerLevel8",
-          "CustomerLevel9",
-          "CustomerLevel10"
+          "field_1",
+          "field_2",
+          "field_3",
+          "field_4",
+          "field_5",
+          "field_6",
+          "field_7",
+          "field_8",
+          "field_9"
         ]
       }
     }
@@ -990,7 +778,7 @@
   "referencedEntities": {
     "Author": {
       "lookupEndpoint": {
-        "path": "/tables/1fedd0f5-2c94-441d-9c95-1559fc2dbb3f/entities/Author",
+        "path": "/tables/405526ea-7b2b-493c-a370-ba8242a2c264/entities/Author",
         "capabilities": {
           "searchable": true,
           "requiresSearch": false
@@ -999,7 +787,7 @@
     },
     "Editor": {
       "lookupEndpoint": {
-        "path": "/tables/1fedd0f5-2c94-441d-9c95-1559fc2dbb3f/entities/Editor",
+        "path": "/tables/405526ea-7b2b-493c-a370-ba8242a2c264/entities/Editor",
         "capabilities": {
           "searchable": true,
           "requiresSearch": false
@@ -1008,7 +796,7 @@
     },
     "4651e8f2-38c9-4ad0-8def-41f743f76f30": {
       "lookupEndpoint": {
-        "path": "/tables/1fedd0f5-2c94-441d-9c95-1559fc2dbb3f/entities/%257bContentType%257d",
+        "path": "/tables/405526ea-7b2b-493c-a370-ba8242a2c264/entities/%257bContentType%257d",
         "capabilities": {
           "searchable": true,
           "requiresSearch": false
@@ -1016,6 +804,6 @@
       }
     }
   },
-  "webUrl": "https://coraenv-my.sharepoint.com/personal/bizdev_cora-environment_com/Lists/Service Orders/AllItems.aspx",
+  "webUrl": "https://coraenv-my.sharepoint.com/personal/bizdev_cora-environment_com/Lists/customerareadatacleanfinal/AllItems.aspx",
   "x-ms-connection-version": ""
 }

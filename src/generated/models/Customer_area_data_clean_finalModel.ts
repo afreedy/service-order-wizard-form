@@ -23,32 +23,18 @@ export interface EditorValue {
   JobTitle: string;
 }
 
-export interface ServiceOrdersBase {
+export interface Customer_area_data_clean_finalBase {
   ID?: number;
   Title?: string;
-  Customer?: string;
-  FormCompletionTime?: string;
-  CustomerName?: string;
-  CustomerLocation?: string;
-  CustomerTenant?: string;
-  IsAdhocCustomer?: boolean;
-  DriverName?: string;
-  VehicleNumber?: string;
-  DateOfCollection?: string;
-  ReceiptUrl?: string;
-  SignatureUrl?: string;
-  BeforePhotoUrl?: string;
-  AfterPhotoUrl?: string;
-  Notes?: string;
-  WasteCategory?: string;
-  Tonnage?: number;
-  CustomerLevel4?: string;
-  CustomerLevel5?: string;
-  CustomerLevel6?: string;
-  CustomerLevel7?: string;
-  CustomerLevel8?: string;
-  CustomerLevel9?: string;
-  CustomerLevel10?: string;
+  field_1?: string;
+  field_2?: string;
+  field_3?: string;
+  field_4?: string;
+  field_5?: string;
+  field_6?: string;
+  field_7?: string;
+  field_8?: string;
+  field_9?: string;
   OData__ColorTag?: string;
   ComplianceAssetId?: string;
   Modified?: string;
@@ -92,12 +78,12 @@ export interface ServiceOrdersBase {
   "{TriggerWindowEndToken}"?: string;
 }
 
-export interface ServiceOrdersRead extends ServiceOrdersBase {
+export interface Customer_area_data_clean_finalRead extends Customer_area_data_clean_finalBase {
   Author?: AuthorValue;
   Editor?: EditorValue;
 }
 
-export interface ServiceOrdersWrite extends ServiceOrdersBase {
+export interface Customer_area_data_clean_finalWrite extends Customer_area_data_clean_finalBase {
   Author?: AuthorValue;
   Editor?: EditorValue;
 }

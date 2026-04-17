@@ -7,7 +7,7 @@
   "description": " ",
   "buildPath": "./dist",
   "buildEntryPoint": "index.html",
-  "localAppUrl": "http://localhost:3000",
+  "localAppUrl": "http://localhost:5173",
   "logoPath": "Default",
   "connectionReferences": {
     "19c1dabf-3158-497f-bac4-df5274cfe97a": {
@@ -22,7 +22,8 @@
         "service order proof queue",
         "waste_categories",
         "customer-area-data",
-        "customer-area-data-clean"
+        "customer-area-data-clean",
+        "customer-area-data-clean-final"
       ],
       "dataSets": {
         "https://coraenv-my.sharepoint.com/personal/bizdev_cora-environment_com": {
@@ -53,6 +54,9 @@
             },
             "customer-area-data-clean": {
               "tableName": "b6f24928-7b5f-4ef3-ba71-82a2e2669a54"
+            },
+            "customer-area-data-clean-final": {
+              "tableName": "405526ea-7b2b-493c-a370-ba8242a2c264"
             }
           }
         }
