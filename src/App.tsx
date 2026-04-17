@@ -1704,7 +1704,14 @@ function StepAssignment({
   const applyScaleSuggestion = (id: string) => {
     const line = form.WasteItems.find((item) => item.id === id)
     if (!line?.scaleOcrSuggestion) return
-    updateWasteLine(id, { Tonnage: line.scaleOcrSuggestion })
+    updateWasteLine(id, {
+      Tonnage: line.scaleOcrSuggestion,
+      scaleOcrStatus: 'idle',
+      scaleOcrSuggestion: undefined,
+      scaleOcrConfidence: undefined,
+      scaleOcrReasons: undefined,
+      scaleOcrError: undefined,
+    })
   }
 
   return (
