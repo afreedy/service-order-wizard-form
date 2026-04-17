@@ -1,0 +1,63 @@
+{
+  "version": "1.0",
+  "appId": null,
+  "appDisplayName": "App From Scratch",
+  "region": "prod",
+  "environmentId": "Default-7b17d03e-59bf-489b-957c-83bd54d3686b",
+  "description": " ",
+  "buildPath": "./dist",
+  "buildEntryPoint": "index.html",
+  "localAppUrl": "http://localhost:3000",
+  "logoPath": "Default",
+  "connectionReferences": {
+    "19c1dabf-3158-497f-bac4-df5274cfe97a": {
+      "id": "/providers/Microsoft.PowerApps/apis/shared_sharepointonline",
+      "displayName": "SharePoint",
+      "dataSources": [
+        "vehicles",
+        "drivers",
+        "drivers1",
+        "service order waste items",
+        "service orders",
+        "service order proof queue",
+        "waste_categories",
+        "customer-area-data",
+        "customer-area-data-clean"
+      ],
+      "dataSets": {
+        "https://coraenv-my.sharepoint.com/personal/bizdev_cora-environment_com": {
+          "dataSources": {
+            "vehicles": {
+              "tableName": "4455fca9-1959-4fc4-b7a9-307f54fcb5b2"
+            },
+            "drivers": {
+              "tableName": "e89751ab-fd1a-4825-b4a7-c8bd838ad07b"
+            },
+            "drivers1": {
+              "tableName": "44956b33-7907-4689-b5b8-2765dc174b68"
+            },
+            "service order waste items": {
+              "tableName": "7bcc576c-f096-478e-8777-4a2cc7e818cf"
+            },
+            "service orders": {
+              "tableName": "1fedd0f5-2c94-441d-9c95-1559fc2dbb3f"
+            },
+            "service order proof queue": {
+              "tableName": "79f86262-be33-413e-b08b-de785d4a3163"
+            },
+            "waste_categories": {
+              "tableName": "ceab83fe-7e12-46e8-a28d-035b621d845d"
+            },
+            "customer-area-data": {
+              "tableName": "abab3f85-7d27-4226-8566-3d3d04672fe1"
+            },
+            "customer-area-data-clean": {
+              "tableName": "b6f24928-7b5f-4ef3-ba71-82a2e2669a54"
+            }
+          }
+        }
+      }
+    }
+  },
+  "databaseReferences": {}
+}
