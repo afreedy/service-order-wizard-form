@@ -12,6 +12,7 @@ The app gives field users a guided service order wizard and gives authorized adm
 - Supports ad hoc customer entry when the customer is not in the reference list.
 - Captures a customer signature in the browser.
 - Accepts before and after proof photos, compresses them client-side, and queues the media payload in SharePoint.
+- Helps users read scale photos with local OCR and an optional remote OCR endpoint before they confirm tonnage.
 - Creates one `service orders` row per completed waste line and also mirrors waste details to `service order waste items`.
 - Provides admin-only pages for viewing service orders and maintaining drivers, vehicles, and waste categories.
 
@@ -35,6 +36,7 @@ The app gives field users a guided service order wizard and gives authorized adm
 │   ├── App.tsx                     Main application, wizard, admin pages, and submit flow
 │   ├── App.css                     Application styles
 │   ├── main.tsx                    React entry point
+│   ├── weightOcr.ts                Scale-photo preprocessing, OCR, and tonnage parsing
 │   ├── assets/                     Bundled image assets
 │   └── generated/                  Power Apps generated models and services
 ├── docs/
@@ -77,6 +79,15 @@ Preview a production build locally:
 ```powershell
 npm run preview
 ```
+
+Optional scale OCR endpoint:
+
+```powershell
+$env:VITE_WEIGHT_OCR_ENDPOINT="https://your-ocr-endpoint.example/weight"
+npm run dev
+```
+
+The browser sends only the selected scale crop to this endpoint. Keep provider API keys on the server side; do not expose cloud OCR secrets through Vite environment variables.
 
 ## Power Apps configuration
 

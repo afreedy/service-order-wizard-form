@@ -51,6 +51,25 @@ http://localhost:5173
 
 Keep this aligned with the Vite dev server port when testing through Power Apps.
 
+## Optional scale OCR endpoint
+
+Scale-photo OCR runs locally with Tesseract by default. To supplement local OCR with a server-side provider, set `VITE_WEIGHT_OCR_ENDPOINT` before starting Vite:
+
+```powershell
+$env:VITE_WEIGHT_OCR_ENDPOINT="https://your-ocr-endpoint.example/weight"
+npm run dev
+```
+
+The app posts the selected crop image as multipart form data with an `image` field. Expected response shape:
+
+```json
+{
+  "lines": [{ "text": "1230 kg", "confidence": 0.94 }]
+}
+```
+
+The endpoint can also return top-level `text` and `confidence` fields. Keep cloud OCR credentials on the server side; Vite environment variables are bundled for browser use.
+
 ## Deployment checklist
 
 Before publishing:
@@ -62,6 +81,7 @@ Before publishing:
 - Confirm the active customer source, `customer-area-data-clean-final`, contains rows.
 - Test the service order wizard with one waste line and multiple waste lines.
 - Test the proof step with a signature only, then with signature plus before/after photos.
+- Test scale-photo OCR with a clear scale image, a manually adjusted crop, and a manual tonnage entry fallback.
 - Test the admin pages with an allowed admin account.
 - Confirm downstream proof processing handles new `service order proof queue` rows.
 
@@ -127,17 +147,7 @@ Checks:
 
 ### Scale OCR is inaccurate
 
-Scale OCR uses the selected crop, local Tesseract passes, and an optional remote OCR endpoint. If `VITE_WEIGHT_OCR_ENDPOINT` is set, the browser posts the crop image to that endpoint and combines the returned text with local OCR evidence. Keep the OCR service key on the server side; do not put cloud OCR credentials in Vite environment variables.
-
-Expected remote endpoint response shape:
-
-```json
-{
-  "lines": [
-    { "text": "1230 kg", "confidence": 0.94 }
-  ]
-}
-```
+Scale OCR uses the selected crop, browser-side preprocessing, local Tesseract passes, seven-segment parsing, and an optional remote OCR endpoint. If `VITE_WEIGHT_OCR_ENDPOINT` is set, the browser posts the crop image to that endpoint and combines the returned text with local OCR evidence.
 
 Checks:
 

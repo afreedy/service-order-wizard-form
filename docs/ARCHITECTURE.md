@@ -23,6 +23,7 @@ Most of the app currently lives in `src/App.tsx`. The file contains:
 - Shared form and response types.
 - Customer hierarchy helpers.
 - Proof image compression helpers.
+- Scale-photo OCR state and crop orchestration.
 - Reusable form controls.
 - Sidebar, order table, admin page, wizard steps, signature pad, and photo upload components.
 - Top-level app state, data loading, admin routing, and submit orchestration.
@@ -34,6 +35,7 @@ This is workable for the current app size, but new feature work should prefer ex
 - `features/admin/` for admin reference-data pages.
 - `lib/customerHierarchy.ts` for customer option derivation.
 - `lib/proofMedia.ts` for photo compression and proof queue payload creation.
+- `lib/weightOcr.ts` for OCR preprocessing and weight parsing if the current helper grows beyond scale-photo concerns.
 
 ## Startup flow
 
@@ -57,7 +59,9 @@ The wizard has five steps:
 4. Proof
 5. Review
 
-Step validation prevents users from advancing when required data is missing. The final submit flow:
+Step validation prevents users from advancing when required data is missing. On the assignment step, users can attach a scale photo for each waste line, adjust the crop around the scale display, run OCR, and choose whether to apply the detected value to the tonnage field.
+
+The final submit flow:
 
 1. Validates the title, customer proof signature, and waste lines.
 2. Builds a base `service orders` payload.
@@ -67,6 +71,19 @@ Step validation prevents users from advancing when required data is missing. The
 6. Creates a `service order proof queue` row with signature and photo payloads.
 7. Optionally updates created service orders with proof URLs when returned by the proof upload response.
 8. Rolls back created proof queue, waste item, and service order records if the submit flow fails before completion.
+
+### Scale-photo OCR
+
+Scale OCR lives in `src/weightOcr.ts` and is called from the waste-line UI in `src/App.tsx`. The flow is deliberately confirm-before-write:
+
+1. The user chooses an image file for a waste line.
+2. The app creates a local preview and preprocesses the image in the browser.
+3. The preprocessing step auto-crops likely display regions, creates OCR image variants, and extracts a seven-segment candidate when possible.
+4. `runWeightOcr()` queues OCR work so only one recognition pass runs at a time against the shared Tesseract worker.
+5. The parser accepts plausible display values greater than 0 and up to 100000, then marks a suggestion reliable only when confidence, plausibility, unit evidence, or cross-pass agreement is strong enough.
+6. The UI displays the suggestion, confidence, reasoning, and raw OCR text. Tonnage changes only when the user clicks `Use detected value`.
+
+If `VITE_WEIGHT_OCR_ENDPOINT` is set, the app posts the selected crop image to that endpoint and merges returned text with local OCR candidates. The endpoint is optional; local Tesseract and seven-segment parsing still run without it.
 
 ### Admin reference data
 
