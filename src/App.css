@@ -1602,6 +1602,38 @@
   max-width: 380px;
 }
 
+.cora-table-date-filter {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 1 auto;
+}
+
+.cora-table-date-filter .cora-custom-select {
+  min-width: 180px;
+}
+
+.cora-table-date-filter .cora-custom-select-trigger {
+  min-height: 40px;
+  background: var(--s1);
+}
+
+.cora-table-date-clear {
+  border: none;
+  background: transparent;
+  color: var(--cora-green-hover);
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0;
+  white-space: nowrap;
+}
+
+.cora-table-date-clear:hover {
+  color: var(--cora-green);
+}
+
 .cora-table-search-icon {
   position: absolute;
   left: 12px;
@@ -1888,6 +1920,15 @@
     flex-direction: column;
     align-items: stretch;
     gap: 8px;
+  }
+
+  .cora-table-date-filter {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .cora-table-date-filter .cora-custom-select {
+    min-width: 0;
   }
 
   .cora-table-filter-badge {

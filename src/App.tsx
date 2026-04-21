@@ -385,7 +385,7 @@ const findProofQueueByTitle = async (title: string) => {
    ═══════════════════════════════════════════════════════ */
 
 function CustomSelect({
-  id, value, onChange, disabled, options, placeholder, searchable = false, searchPlaceholder = 'Search...',
+  id, value, onChange, disabled, options, placeholder, searchable = true, searchPlaceholder,
 }: {
   id: string, value: string, onChange: (val: string) => void, disabled?: boolean,
   options: { value: string, label: string }[], placeholder?: string, searchable?: boolean, searchPlaceholder?: string
@@ -407,7 +407,7 @@ function CustomSelect({
   }, [])
 
   useEffect(() => {
-    if (searchable) window.setTimeout(() => searchInputRef.current?.focus(), 0)
+    if (isOpen && searchable) window.setTimeout(() => searchInputRef.current?.focus(), 0)
   }, [isOpen, searchable])
 
   const selectedOption = options.find(o => o.value === value)
@@ -449,8 +449,8 @@ function CustomSelect({
                 value={searchTerm}
                 onChange={(event) => setSearchTerm(event.target.value)}
                 onKeyDown={(event) => event.stopPropagation()}
-                placeholder={searchPlaceholder}
-                aria-label={searchPlaceholder}
+                placeholder={searchPlaceholder ?? 'Search options...'}
+                aria-label={searchPlaceholder ?? 'Search options'}
               />
             </li>
           )}
@@ -664,6 +664,7 @@ function ToastNotif({ toast, onClose }: { toast: Toast; onClose: () => void }) {
 /* ── Orders Table ── */
 function OrdersTable({ orders, loadState }: { orders: ServiceOrdersRead[]; loadState: Load }) {
   const [search, setSearch] = useState('')
+  const [selectedDate, setSelectedDate] = useState('')
 
   const cols = ['ID', 'Title', 'CustomerName', 'DriverName', 'VehicleNumber', 'DateOfCollection'] as const
   const colLabels: Record<(typeof cols)[number], string> = {
@@ -676,11 +677,25 @@ function OrdersTable({ orders, loadState }: { orders: ServiceOrdersRead[]; loadS
   }
 
   const normalizedSearch = search.trim().toLowerCase()
-  const filtered = normalizedSearch
-    ? orders.filter((o) =>
-        cols.some((c) => String(o[c] ?? '').toLowerCase().includes(normalizedSearch))
-      )
-    : orders
+  const hasSearch = Boolean(normalizedSearch)
+  const hasDateFilter = Boolean(selectedDate)
+  const filtered = orders.filter((o) => {
+    const matchesSearch = !hasSearch || cols.some((c) => String(o[c] ?? '').toLowerCase().includes(normalizedSearch))
+    const matchesDate = !hasDateFilter || String(o.DateOfCollection ?? '').slice(0, 10) === selectedDate
+    return matchesSearch && matchesDate
+  })
+
+  const formatDateDisplay = (val: string) => {
+    if (!val) return ''
+    const [y, m, d] = val.split('-')
+    if (!y || !m || !d) return ''
+    return `${d}/${m}/${y}`
+  }
+
+  const activeFilterLabel = [
+    hasSearch ? 'search' : '',
+    hasDateFilter ? `date ${formatDateDisplay(selectedDate)}` : '',
+  ].filter(Boolean).join(' and ')
 
   const formatCell = (col: (typeof cols)[number], value: unknown) => {
     const str = String(value ?? '—')
@@ -721,7 +736,19 @@ function OrdersTable({ orders, loadState }: { orders: ServiceOrdersRead[]; loadS
               </button>
             )}
           </div>
-          {normalizedSearch && (
+          <div className="cora-table-date-filter">
+            <CustomDatePicker
+              id="orders-date-filter"
+              value={selectedDate}
+              onChange={setSelectedDate}
+            />
+            {hasDateFilter && (
+              <button className="cora-table-date-clear" onClick={() => setSelectedDate('')} aria-label="Clear date filter">
+                Clear date
+              </button>
+            )}
+          </div>
+          {(hasSearch || hasDateFilter) && (
             <span className="cora-table-filter-badge">
               {filtered.length} of {orders.length} shown
             </span>
@@ -749,7 +776,7 @@ function OrdersTable({ orders, loadState }: { orders: ServiceOrdersRead[]; loadS
       {loadState === 'loaded' && orders.length > 0 && filtered.length === 0 && (
         <div className="cora-table-empty">
           <span className="cora-table-empty-icon">{I.clipList}</span>
-          <span>No orders match "{search}"</span>
+          <span>No orders match {activeFilterLabel || 'the current filters'}.</span>
         </div>
       )}
       {loadState === 'loaded' && filtered.length > 0 && (
@@ -1733,6 +1760,7 @@ function StepAssignment({
           onChange={(val) => set('DriverName', val)}
           disabled={busy}
           placeholder="Select driver…"
+          searchPlaceholder="Search drivers..."
           options={driverOptions.map((name) => ({ value: name, label: name }))}
         />
       </div>
@@ -1744,6 +1772,7 @@ function StepAssignment({
           onChange={(val) => set('VehicleNumber', val)}
           disabled={busy}
           placeholder="Select vehicle…"
+          searchPlaceholder="Search vehicles..."
           options={vehicles.map((v) => ({ value: v.Title ?? '', label: v.Title ?? `Vehicle ${v.ID}` }))}
         />
       </div>
@@ -1761,6 +1790,7 @@ function StepAssignment({
                   onChange={(val) => updateWasteLine(line.id, { WasteCategory: val })}
                   disabled={busy}
                   placeholder="Select waste category..."
+                  searchPlaceholder="Search waste categories..."
                   options={categories.map((c) => ({ value: c.Title ?? '', label: c.Title ?? `Waste category ${c.ID}` }))}
                 />
               </div>
