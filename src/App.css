@@ -2656,3 +2656,50 @@
 .cora-btn-danger:active:not(:disabled) {
   transform: scale(0.96);
 }
+
+.cora-sync-banner {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 16px;
+  margin-bottom: 20px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.9);
+}
+
+.cora-sync-banner-copy {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: var(--tx-secondary);
+}
+
+.cora-sync-banner-copy strong {
+  color: var(--tx-primary);
+}
+
+.cora-sync-banner-error {
+  color: var(--error);
+}
+
+.cora-sync-banner-actions {
+  display: flex;
+  align-items: center;
+}
+
+@media (max-width: 720px) {
+  .cora-sync-banner {
+    flex-direction: column;
+  }
+
+  .cora-sync-banner-actions {
+    width: 100%;
+  }
+
+  .cora-sync-banner-actions .cora-btn {
+    width: 100%;
+    justify-content: center;
+  }
+}

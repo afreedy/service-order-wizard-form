@@ -11,19 +11,18 @@ import type { Drivers1Read } from './generated/models/Drivers1Model'
 import type { Customer_area_data_clean_finalRead } from './generated/models/Customer_area_data_clean_finalModel'
 import type { VehiclesRead, VehiclesWrite } from './generated/models/VehiclesModel'
 import type { Waste_CategoriesRead, Waste_CategoriesWrite } from './generated/models/Waste_CategoriesModel'
-import type { ServiceOrderWasteItemsRead, ServiceOrderWasteItemsWrite } from './generated/models/ServiceOrderWasteItemsModel'
-import type { ServiceOrderProofQueueRead, ServiceOrderProofQueueWrite } from './generated/models/ServiceOrderProofQueueModel'
-import type { ServiceOrdersRead, ServiceOrdersWrite } from './generated/models/ServiceOrdersModel'
+import type { ServiceOrdersRead } from './generated/models/ServiceOrdersModel'
 import { Drivers1Service } from './generated/services/Drivers1Service'
 import { Customer_area_data_clean_finalService } from './generated/services/Customer_area_data_clean_finalService'
 import { VehiclesService } from './generated/services/VehiclesService'
 import { Waste_CategoriesService } from './generated/services/Waste_CategoriesService'
-import { ServiceOrderWasteItemsService } from './generated/services/ServiceOrderWasteItemsService'
-import { ServiceOrderProofQueueService } from './generated/services/ServiceOrderProofQueueService'
 import { ServiceOrdersService } from './generated/services/ServiceOrdersService'
 import { preprocessImageForOcr, runWeightOcr } from './weightOcr'
 import type { CropRect } from './weightOcr'
-import type { ScaleOcrStatus } from './weightOcr'
+import type { CachedReferenceData, Form, PersistedDraft, PersistedForm, PersistedWasteLine, WasteLine } from './lib/offlineStore'
+import { clearDraft, fromStoredMediaFile, getQueueSummary, loadDraft, saveDraft, toStoredMediaFile } from './lib/offlineStore'
+import { createClientSubmissionId, enqueueSubmission, processPendingQueue } from './lib/offlineQueue'
+import { readCachedReferenceData, writeCachedReferenceData } from './lib/referenceCache'
 import logoImage from './assets/logo.png'
 import './App.css'
 
@@ -61,55 +60,9 @@ type Load = 'loading' | 'loaded' | 'error'
 type View = 'form' | 'list' | 'admin'
 type AdminTab = 'drivers' | 'vehicles' | 'waste'
 type ProtectedDestination = { view: 'list' } | { view: 'admin'; tab: AdminTab }
+type SubmissionMode = 'draft' | 'queued'
 
 interface Toast { type: 'success' | 'error'; text: string }
-
-interface WasteLine {
-  id: string
-  WasteCategory: string
-  Tonnage: string
-  scalePhotoFile?: File
-  scalePhotoPreviewUrl?: string
-  scaleOcrCropPreviewUrl?: string
-  scaleOcrCrop?: CropRect
-  scaleOcrStatus?: ScaleOcrStatus
-  scaleOcrText?: string
-  scaleOcrSuggestion?: string
-  scaleOcrConfidence?: number
-  scaleOcrReasons?: string[]
-  scaleOcrError?: string
-  scaleOcrRequestId?: string
-}
-
-interface Form {
-  Title: string; Customer: string; CustomerName: string
-  CustomerLocation: string; CustomerTenant: string
-  CustomerLevel4: string; CustomerLevel5: string; CustomerLevel6: string; CustomerLevel7: string
-  CustomerLevel8: string; CustomerLevel9: string; CustomerLevel10: string
-  IsAdhocCustomer: boolean; DriverName: string
-  VehicleNumber: string; DateOfCollection: string
-  WasteItems: WasteLine[]
-  Notes: string
-}
-
-interface ProofUploadRequest {
-  serviceOrderId: number
-  orderTitle: string
-  signatureFileName: string
-  signatureBase64: string
-  beforePhotoFileName?: string
-  beforePhotoBase64?: string
-  afterPhotoFileName?: string
-  afterPhotoBase64?: string
-}
-
-interface ProofUploadResponse {
-  queueItem?: ServiceOrderProofQueueRead
-  queued: boolean
-  signatureUrl?: string
-  beforePhotoUrl?: string
-  afterPhotoUrl?: string
-}
 
 type DriverOptionSource = Drivers1Read
 type CustomerAreaOption = Customer_area_data_clean_finalRead
@@ -251,6 +204,48 @@ const createBlankForm = (): Form => ({
 }
 )
 
+const buildPersistedForm = (form: Form): PersistedForm => ({
+  ...form,
+  WasteItems: form.WasteItems.map((line): PersistedWasteLine => ({
+    id: line.id,
+    WasteCategory: line.WasteCategory,
+    Tonnage: line.Tonnage,
+    scalePhoto: toStoredMediaFile(line.scalePhotoFile, `${line.id}-scale-photo.jpg`),
+    scaleOcrCropPreviewDataUrl: line.scaleOcrCropPreviewUrl,
+    scaleOcrCrop: line.scaleOcrCrop,
+    scaleOcrStatus: line.scaleOcrStatus,
+    scaleOcrText: line.scaleOcrText,
+    scaleOcrSuggestion: line.scaleOcrSuggestion,
+    scaleOcrConfidence: line.scaleOcrConfidence,
+    scaleOcrReasons: line.scaleOcrReasons,
+    scaleOcrError: line.scaleOcrError,
+    scaleOcrRequestId: line.scaleOcrRequestId,
+  })),
+})
+
+const restorePersistedForm = (persisted: PersistedForm): Form => ({
+  ...persisted,
+  WasteItems: persisted.WasteItems.map((line): WasteLine => {
+    const scalePhotoFile = fromStoredMediaFile(line.scalePhoto)
+    return {
+      id: line.id,
+      WasteCategory: line.WasteCategory,
+      Tonnage: line.Tonnage,
+      scalePhotoFile: scalePhotoFile ?? undefined,
+      scalePhotoPreviewUrl: scalePhotoFile ? URL.createObjectURL(scalePhotoFile) : undefined,
+      scaleOcrCropPreviewUrl: line.scaleOcrCropPreviewDataUrl,
+      scaleOcrCrop: line.scaleOcrCrop,
+      scaleOcrStatus: line.scaleOcrStatus,
+      scaleOcrText: line.scaleOcrText,
+      scaleOcrSuggestion: line.scaleOcrSuggestion,
+      scaleOcrConfidence: line.scaleOcrConfidence,
+      scaleOcrReasons: line.scaleOcrReasons,
+      scaleOcrError: line.scaleOcrError,
+      scaleOcrRequestId: line.scaleOcrRequestId,
+    }
+  }),
+})
+
 const hasWasteLineValue = (line: WasteLine) =>
   Boolean(line.WasteCategory.trim() || line.Tonnage.trim())
 
@@ -270,6 +265,12 @@ const revokeScalePhotoPreviewUrls = (lines: WasteLine[]) => {
   }
 }
 
+const revokePreviewUrls = (urls: string[]) => {
+  for (const url of urls) {
+    URL.revokeObjectURL(url)
+  }
+}
+
 const STEPS = [
   { label: 'Basic Info', desc: 'Title & date', icon: I.fileTxt },
   { label: 'Customer', desc: 'Customer details', icon: I.building },
@@ -279,106 +280,6 @@ const STEPS = [
 ] as const
 
 const LAST_STEP = STEPS.length - 1
-
-const uploadServiceOrderProof = async (request: ProofUploadRequest): Promise<ProofUploadResponse> => {
-  const queueItem: Partial<Omit<ServiceOrderProofQueueWrite, 'ID'>> = {
-    Title: `${request.orderTitle}-proof`,
-    ServiceOrderId: String(request.serviceOrderId),
-    OrderTitle: request.orderTitle,
-    SignatureFileName: request.signatureFileName,
-    SignatureBase64: request.signatureBase64,
-    Processed: false,
-  }
-
-  if (request.beforePhotoFileName && request.beforePhotoBase64) {
-    queueItem.BeforePhotoFileName = request.beforePhotoFileName
-    queueItem.BeforePhotoBase64 = request.beforePhotoBase64
-  }
-  if (request.afterPhotoFileName && request.afterPhotoBase64) {
-    queueItem.AfterPhotoFileName = request.afterPhotoFileName
-    queueItem.AfterPhotoBase64 = request.afterPhotoBase64
-  }
-
-  const result = await ServiceOrderProofQueueService.create(queueItem as Omit<ServiceOrderProofQueueWrite, 'ID'>)
-
-  const confirmedQueueItem = result.data?.ID
-    ? result.data
-    : await findProofQueueByTitle(queueItem.Title ?? '')
-  if (!confirmedQueueItem?.ID) {
-    throw new Error('Could not confirm the proof media queue item.')
-  }
-
-  return { queueItem: confirmedQueueItem, queued: true }
-}
-
-const dataUrlToBase64 = (dataUrl: string) => dataUrl.split(',')[1] ?? ''
-
-const loadImage = (file: File) =>
-  new Promise<HTMLImageElement>((resolve, reject) => {
-    const url = URL.createObjectURL(file)
-    const image = new Image()
-    image.onload = () => {
-      URL.revokeObjectURL(url)
-      resolve(image)
-    }
-    image.onerror = () => {
-      URL.revokeObjectURL(url)
-      reject(new Error(`Could not load ${file.name}.`))
-    }
-    image.src = url
-  })
-
-const fileToBase64 = async (file: File) => {
-  const image = await loadImage(file)
-  const canvas = document.createElement('canvas')
-  const maxSide = 720
-  const scale = Math.min(1, maxSide / Math.max(image.naturalWidth, image.naturalHeight))
-  canvas.width = Math.max(1, Math.round(image.naturalWidth * scale))
-  canvas.height = Math.max(1, Math.round(image.naturalHeight * scale))
-
-  const ctx = canvas.getContext('2d')
-  if (!ctx) throw new Error('Could not prepare the photo for upload.')
-  ctx.drawImage(image, 0, 0, canvas.width, canvas.height)
-
-  for (const quality of [0.72, 0.62, 0.52, 0.42, 0.32]) {
-    const base64 = dataUrlToBase64(canvas.toDataURL('image/jpeg', quality))
-    if (base64.length <= 60000) return base64
-  }
-
-  throw new Error(`${file.name} is too large to queue. Try a smaller photo.`)
-}
-
-const getPhotoFileName = (orderTitle: string, label: 'before' | 'after', file: File) =>
-  `${orderTitle}-${label}-${file.name.replace(/[^a-z0-9]/gi, '-').slice(0, 24)}.jpg`
-
-const delay = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms))
-
-const escapeODataString = (value: string) => value.replace(/'/g, "''")
-
-const findServiceOrdersByTitle = async (title: string, expectedCount = 1) => {
-  const filter = `Title eq '${escapeODataString(title)}'`
-  for (let attempt = 0; attempt < 5; attempt += 1) {
-    const result = await ServiceOrdersService.getAll({ filter, top: Math.max(expectedCount, 50) })
-    const rows = (result.data ?? []).filter((order) => order.Title === title)
-    if (rows.length >= expectedCount || attempt === 4) {
-      return rows.sort((a, b) => Number(a.ID ?? 0) - Number(b.ID ?? 0))
-    }
-    await delay(400)
-  }
-  return []
-}
-
-const findProofQueueByTitle = async (title: string) => {
-  if (!title) return undefined
-  const filter = `Title eq '${escapeODataString(title)}'`
-  for (let attempt = 0; attempt < 5; attempt += 1) {
-    const result = await ServiceOrderProofQueueService.getAll({ filter, top: 1 })
-    const row = (result.data ?? []).find((item) => item.Title === title)
-    if (row?.ID || attempt === 4) return row
-    await delay(400)
-  }
-  return undefined
-}
 
 /* ═══════════════════════════════════════════════════════
    Sub-components
@@ -2282,18 +2183,69 @@ function App() {
   const [orders, setOrders] = useState<ServiceOrdersRead[]>([])
   const [loadState, setLoadState] = useState<Load>('loading')
   const [loadError, setLoadError] = useState('')
+  const [usingCachedReferenceData, setUsingCachedReferenceData] = useState(false)
+  const [cacheFetchedAt, setCacheFetchedAt] = useState('')
 
   const [form, setForm] = useState<Form>(() => createBlankForm())
+  const [draftClientSubmissionId, setDraftClientSubmissionId] = useState(() => createClientSubmissionId())
   const [step, setStep] = useState(0)
   const [submitting, setSubmitting] = useState(false)
   const [submitted, setSubmitted] = useState(false)
+  const [submissionMode, setSubmissionMode] = useState<SubmissionMode>('draft')
   const [toast, setToast] = useState<Toast | null>(null)
   const [adhocModalOpen, setAdhocModalOpen] = useState(false)
   const [resetModalOpen, setResetModalOpen] = useState(false)
   const [signatureDataUrl, setSignatureDataUrl] = useState('')
   const [beforePhotoFile, setBeforePhotoFile] = useState<File | null>(null)
   const [afterPhotoFile, setAfterPhotoFile] = useState<File | null>(null)
+  const [draftReady, setDraftReady] = useState(false)
+  const [isOnline, setIsOnline] = useState(() => window.navigator.onLine)
+  const [queuePendingCount, setQueuePendingCount] = useState(0)
+  const [queueLastError, setQueueLastError] = useState('')
+  const [queueSyncing, setQueueSyncing] = useState(false)
   const scalePhotoPreviewUrlsRef = useRef<string[]>([])
+
+  const refreshQueueState = useCallback(async () => {
+    const summary = await getQueueSummary()
+    setQueuePendingCount(summary.pendingCount)
+    setQueueLastError(summary.lastError)
+  }, [])
+
+  const syncQueuedSubmissions = useCallback(async () => {
+    if (!window.navigator.onLine) {
+      await refreshQueueState()
+      return
+    }
+    setQueueSyncing(true)
+    try {
+      await processPendingQueue({
+        onSubmissionSynced: (item) => {
+          if (item.clientSubmissionId === draftClientSubmissionId && submissionMode === 'queued') {
+            revokeScalePhotoPreviewUrls(form.WasteItems)
+            setForm(createBlankForm())
+            setSignatureDataUrl('')
+            setBeforePhotoFile(null)
+            setAfterPhotoFile(null)
+            setStep(0)
+            setSubmitted(false)
+            setSubmissionMode('draft')
+            setDraftClientSubmissionId(createClientSubmissionId())
+            void clearDraft()
+            setToast({ type: 'success', text: `Queued order "${item.orderTitle}" synced successfully.` })
+          }
+        },
+        onSubmissionFailed: (_, error) => {
+          setToast({ type: 'error', text: error })
+        },
+        onQueueUpdated: () => {
+          void refreshQueueState()
+        },
+      })
+    } finally {
+      setQueueSyncing(false)
+      await refreshQueueState()
+    }
+  }, [draftClientSubmissionId, form.WasteItems, refreshQueueState, submissionMode])
 
   const loadReferenceData = useCallback(async () => {
     setLoadState('loading')
@@ -2324,8 +2276,32 @@ function App() {
       setVehicles(v.data && Array.isArray(v.data) ? v.data : [])
       setCategories(w.data && Array.isArray(w.data) ? w.data : [])
       setOrders(o.data && Array.isArray(o.data) ? o.data : [])
+      setUsingCachedReferenceData(false)
+      const cacheRecord: CachedReferenceData = {
+        id: 'main',
+        fetchedAt: new Date().toISOString(),
+        customerAreas: c,
+        drivers: d.data && Array.isArray(d.data) ? d.data : [],
+        vehicles: v.data && Array.isArray(v.data) ? v.data : [],
+        categories: w.data && Array.isArray(w.data) ? w.data : [],
+      }
+      setCacheFetchedAt(cacheRecord.fetchedAt)
+      await writeCachedReferenceData(cacheRecord)
       setLoadState('loaded')
     } catch (error) {
+      const cached = await readCachedReferenceData()
+      if (cached) {
+        setCustomerAreas(cached.customerAreas)
+        setDrivers(cached.drivers)
+        setVehicles(cached.vehicles)
+        setCategories(cached.categories)
+        setOrders([])
+        setUsingCachedReferenceData(true)
+        setCacheFetchedAt(cached.fetchedAt)
+        setLoadError(error instanceof Error ? error.message : 'Could not load live reference data.')
+        setLoadState('loaded')
+        return
+      }
       setLoadError(error instanceof Error ? error.message : 'Could not load reference data.')
       setLoadState('error')
     }
@@ -2334,6 +2310,42 @@ function App() {
   useEffect(() => {
     void loadReferenceData()
   }, [loadReferenceData])
+
+  useEffect(() => {
+    let cancelled = false
+    const hydrateOfflineState = async () => {
+      try {
+        const [draft, cachedReferences] = await Promise.all([loadDraft(), readCachedReferenceData(), refreshQueueState()])
+        if (cancelled) return
+        if (cachedReferences) {
+          setCustomerAreas(cachedReferences.customerAreas)
+          setDrivers(cachedReferences.drivers)
+          setVehicles(cachedReferences.vehicles)
+          setCategories(cachedReferences.categories)
+          setUsingCachedReferenceData(true)
+          setCacheFetchedAt(cachedReferences.fetchedAt)
+          setLoadState('loaded')
+        }
+        if (draft) {
+          revokePreviewUrls(scalePhotoPreviewUrlsRef.current)
+          setForm(restorePersistedForm(draft.payload.form))
+          setSignatureDataUrl(draft.payload.signatureDataUrl)
+          setBeforePhotoFile(fromStoredMediaFile(draft.payload.beforePhoto))
+          setAfterPhotoFile(fromStoredMediaFile(draft.payload.afterPhoto))
+          setStep(draft.step)
+          setSubmitted(draft.submissionStatus === 'queued')
+          setSubmissionMode(draft.submissionStatus)
+          setDraftClientSubmissionId(draft.clientSubmissionId)
+        }
+      } finally {
+        if (!cancelled) setDraftReady(true)
+      }
+    }
+    void hydrateOfflineState()
+    return () => {
+      cancelled = true
+    }
+  }, [refreshQueueState])
 
   useEffect(() => {
     let cancelled = false
@@ -2346,6 +2358,56 @@ function App() {
       })
     return () => { cancelled = true }
   }, [])
+
+  useEffect(() => {
+    const handleOnline = () => {
+      setIsOnline(true)
+      void syncQueuedSubmissions()
+    }
+    const handleOffline = () => setIsOnline(false)
+    window.addEventListener('online', handleOnline)
+    window.addEventListener('offline', handleOffline)
+    return () => {
+      window.removeEventListener('online', handleOnline)
+      window.removeEventListener('offline', handleOffline)
+    }
+  }, [syncQueuedSubmissions])
+
+  useEffect(() => {
+    if (!draftReady) return
+    const handle = window.setTimeout(() => {
+      const draft: PersistedDraft = {
+        id: 'active',
+        clientSubmissionId: draftClientSubmissionId,
+        step,
+        updatedAt: new Date().toISOString(),
+        locked: submissionMode === 'queued',
+        submissionStatus: submissionMode,
+        payload: {
+          form: buildPersistedForm(form),
+          signatureDataUrl,
+          beforePhoto: toStoredMediaFile(beforePhotoFile, 'before-photo.jpg'),
+          afterPhoto: toStoredMediaFile(afterPhotoFile, 'after-photo.jpg'),
+        },
+      }
+      void saveDraft(draft)
+    }, 300)
+    return () => window.clearTimeout(handle)
+  }, [
+    afterPhotoFile,
+    beforePhotoFile,
+    draftClientSubmissionId,
+    draftReady,
+    form,
+    signatureDataUrl,
+    step,
+    submissionMode,
+  ])
+
+  useEffect(() => {
+    if (!draftReady) return
+    void syncQueuedSubmissions()
+  }, [draftReady, syncQueuedSubmissions])
 
   useEffect(() => {
     scalePhotoPreviewUrlsRef.current = form.WasteItems
@@ -2454,7 +2516,10 @@ function App() {
     setAdhocModalOpen(false)
     setStep(0)
     setSubmitted(false)
+    setSubmissionMode('draft')
+    setDraftClientSubmissionId(createClientSubmissionId())
     setSubmitting(false)
+    void clearDraft()
   }, [form.WasteItems])
 
   const clearCurrentStepFields = useCallback(() => {
@@ -2745,146 +2810,49 @@ function App() {
       return
     }
     setSubmitting(true)
-    const createdOrders: ServiceOrdersRead[] = []
-    const createdWasteItems: ServiceOrderWasteItemsRead[] = []
-    let createdProofQueue: ServiceOrderProofQueueRead | null = null
-
-    const rollbackCreatedRecords = async () => {
-      const failures: string[] = []
-      const tryDelete = async (label: string, action: () => Promise<void>) => {
-        try {
-          await action()
-        } catch (error) {
-          failures.push(`${label}: ${error instanceof Error ? error.message : 'cleanup failed'}`)
-        }
-      }
-
-      if (createdProofQueue?.ID) {
-        await tryDelete(`proof queue ${createdProofQueue.ID}`, () => ServiceOrderProofQueueService.delete(String(createdProofQueue?.ID)))
-      }
-
-      for (const wasteItem of [...createdWasteItems].reverse()) {
-        if (wasteItem.ID) {
-          await tryDelete(`waste item ${wasteItem.ID}`, () => ServiceOrderWasteItemsService.delete(String(wasteItem.ID)))
-        }
-      }
-
-      for (const order of [...createdOrders].reverse()) {
-        if (order.ID) {
-          await tryDelete(`service order ${order.ID}`, () => ServiceOrdersService.delete(String(order.ID)))
-        }
-      }
-
-      return failures
-    }
 
     try {
-      const wasteLines = getCompleteWasteLines(form.WasteItems)
-      const orderTitle = form.Title || generateOrderTitle()
-      const basePayload: Partial<Omit<ServiceOrdersWrite, 'ID'>> = {
-        Title: orderTitle,
-        Customer: form.Customer || undefined,
-        CustomerName: form.CustomerName || undefined,
-        CustomerLocation: form.CustomerLocation || undefined,
-        CustomerTenant: form.CustomerTenant || undefined,
-        CustomerLevel4: form.CustomerLevel4 || undefined,
-        CustomerLevel5: form.CustomerLevel5 || undefined,
-        CustomerLevel6: form.CustomerLevel6 || undefined,
-        CustomerLevel7: form.CustomerLevel7 || undefined,
-        CustomerLevel8: form.CustomerLevel8 || undefined,
-        CustomerLevel9: form.CustomerLevel9 || undefined,
-        CustomerLevel10: form.CustomerLevel10 || undefined,
-        IsAdhocCustomer: form.IsAdhocCustomer,
-        DriverName: form.DriverName || undefined,
-        VehicleNumber: form.VehicleNumber || undefined,
-        DateOfCollection: form.DateOfCollection || undefined,
-        Notes: form.Notes || undefined,
+      const payload = {
+        form: buildPersistedForm(form),
+        signatureDataUrl,
+        beforePhoto: toStoredMediaFile(beforePhotoFile, 'before-photo.jpg'),
+        afterPhoto: toStoredMediaFile(afterPhotoFile, 'after-photo.jpg'),
       }
-
-      const serviceOrderRows = wasteLines.length > 0 ? wasteLines : [null]
-      for (const line of serviceOrderRows) {
-        const tonnage = line ? Number(line.Tonnage) : undefined
-        const payload: Partial<Omit<ServiceOrdersWrite, 'ID'>> = {
-          ...basePayload,
-          WasteCategory: line?.WasteCategory || undefined,
-          Tonnage: Number.isFinite(tonnage) ? tonnage : undefined,
-        }
-        const res = await ServiceOrdersService.create(payload as Omit<ServiceOrdersWrite, 'ID'>)
-        if (res.data?.ID) {
-          createdOrders.push(res.data)
-        }
-      }
-
-      if (createdOrders.length < serviceOrderRows.length) {
-        const foundOrders = await findServiceOrdersByTitle(orderTitle, serviceOrderRows.length)
-        createdOrders.splice(0, createdOrders.length, ...foundOrders)
-      }
-
-      if (createdOrders.length < serviceOrderRows.length) {
-        throw new Error(`Could not confirm the created service order rows for "${orderTitle}".`)
-      }
-
-      const proofOwnerOrder = createdOrders[0]
-      if (!proofOwnerOrder?.ID) throw new Error('Could not create the service order.')
-
-      if (wasteLines.length > 0) {
-        for (const line of wasteLines) {
-          const tonnage = Number(line.Tonnage)
-          const wasteItem: Partial<Omit<ServiceOrderWasteItemsWrite, 'ID'>> = {
-            Title: orderTitle,
-            WasteCategory: line.WasteCategory,
-            Tonnage: Number.isFinite(tonnage) ? tonnage : undefined,
-          }
-          const wasteResult = await ServiceOrderWasteItemsService.create(wasteItem as Omit<ServiceOrderWasteItemsWrite, 'ID'>)
-          if (wasteResult.data?.ID) createdWasteItems.push(wasteResult.data)
-        }
-      }
-
-      const proofUpload = await uploadServiceOrderProof({
-        serviceOrderId: Number(proofOwnerOrder.ID),
-        orderTitle,
-        signatureFileName: `${orderTitle}-signature.png`,
-        signatureBase64: dataUrlToBase64(signatureDataUrl),
-        beforePhotoFileName: beforePhotoFile ? getPhotoFileName(orderTitle, 'before', beforePhotoFile) : undefined,
-        beforePhotoBase64: beforePhotoFile ? await fileToBase64(beforePhotoFile) : undefined,
-        afterPhotoFileName: afterPhotoFile ? getPhotoFileName(orderTitle, 'after', afterPhotoFile) : undefined,
-        afterPhotoBase64: afterPhotoFile ? await fileToBase64(afterPhotoFile) : undefined,
+      const queuedSubmission = await enqueueSubmission(draftClientSubmissionId, payload)
+      await saveDraft({
+        id: 'active',
+        clientSubmissionId: draftClientSubmissionId,
+        step,
+        updatedAt: new Date().toISOString(),
+        locked: true,
+        submissionStatus: 'queued',
+        payload,
       })
-      createdProofQueue = proofUpload.queueItem ?? null
-
-      const proofUrlFields: Partial<Omit<ServiceOrdersWrite, 'ID'>> = {
-        SignatureUrl: proofUpload.signatureUrl || undefined,
-        BeforePhotoUrl: proofUpload.beforePhotoUrl || undefined,
-        AfterPhotoUrl: proofUpload.afterPhotoUrl || undefined,
-      }
-      const hasProofUrls = Object.values(proofUrlFields).some(Boolean)
-      let savedOrders = [...createdOrders]
-      if (hasProofUrls) {
-        savedOrders = []
-        for (const order of createdOrders) {
-          if (!order.ID) continue
-          const updated = await ServiceOrdersService.update(String(order.ID), proofUrlFields)
-          savedOrders.push((updated.data ?? { ...order, ...proofUrlFields }) as ServiceOrdersRead)
-        }
-      }
-
-      setOrders((p) => [...savedOrders, ...p])
-      const rowText = savedOrders.length === 1 ? '1 service order row' : `${savedOrders.length} service order rows`
-      setToast({ type: 'success', text: `Order "${orderTitle}" created with ${rowText}. Proof media queued for processing.` })
+      setSubmissionMode('queued')
       setSubmitted(true)
+      await refreshQueueState()
+
+      if (window.navigator.onLine) {
+        await syncQueuedSubmissions()
+      } else {
+        setToast({ type: 'success', text: `Order "${queuedSubmission.orderTitle}" saved offline and queued for sync.` })
+      }
     } catch (e) {
-      const rollbackFailures = await rollbackCreatedRecords()
-      const orderIdText = createdOrders.length > 0
-        ? ` Service order IDs: ${createdOrders.map((order) => order.ID).filter(Boolean).join(', ')}.`
-        : ''
-      const rollbackText = rollbackFailures.length > 0
-        ? ` Rollback needs manual cleanup.${orderIdText}`
-        : ' Created records were rolled back; you can retry.'
-      setToast({ type: 'error', text: `${e instanceof Error ? e.message : 'Unexpected error.'}${rollbackText}` })
+      setToast({ type: 'error', text: e instanceof Error ? e.message : 'Unexpected error.' })
     } finally {
       setSubmitting(false)
     }
-  }, [afterPhotoFile, beforePhotoFile, form, loadState, signatureDataUrl])
+  }, [
+    afterPhotoFile,
+    beforePhotoFile,
+    draftClientSubmissionId,
+    form,
+    loadState,
+    refreshQueueState,
+    signatureDataUrl,
+    step,
+    syncQueuedSubmissions,
+  ])
 
   /* ── Step completion states ── */
   const stepDone = (idx: number) => {
@@ -2935,6 +2903,33 @@ function App() {
               : view === 'admin'
                 ? 'Add drivers, vehicles, and waste categories for the service order form.'
                 : 'View and manage all service order records.'}</p>
+          </div>
+
+          <div className="cora-sync-banner">
+            <div className="cora-sync-banner-copy">
+              <strong>{isOnline ? 'Online' : 'Offline'}</strong>
+              <span>
+                {usingCachedReferenceData
+                  ? ` Using cached reference data${cacheFetchedAt ? ` from ${new Date(cacheFetchedAt).toLocaleString()}` : ''}.`
+                  : ' Live reference data connected.'}
+              </span>
+              <span>
+                {queuePendingCount > 0
+                  ? ` ${queuePendingCount} queued submission${queuePendingCount === 1 ? '' : 's'} pending sync.`
+                  : ' No queued submissions.'}
+              </span>
+              {queueLastError && <span className="cora-sync-banner-error">Last sync error: {queueLastError}</span>}
+            </div>
+            <div className="cora-sync-banner-actions">
+              <button
+                className="cora-btn cora-btn-outline"
+                type="button"
+                onClick={() => void syncQueuedSubmissions()}
+                disabled={!isOnline || queueSyncing || queuePendingCount === 0}
+              >
+                {queueSyncing ? 'Syncing…' : 'Retry Sync'}
+              </button>
+            </div>
           </div>
 
           {/* ════ LIST VIEW ════ */}
@@ -3066,8 +3061,12 @@ function App() {
                   {loadState === 'loaded' && submitted && (
                     <div className="cora-success-panel">
                       <div className="cora-success-icon">{I.check}</div>
-                      <h2>Service Order Created</h2>
-                      <p>Your order has been submitted successfully and is now being processed.</p>
+                      <h2>{submissionMode === 'queued' ? 'Service Order Queued' : 'Service Order Created'}</h2>
+                      <p>{submissionMode === 'queued'
+                        ? (isOnline
+                          ? 'Your order snapshot is saved locally and is syncing in the background.'
+                          : 'Your order snapshot is saved locally and will sync automatically when internet access returns.')
+                        : 'Your order has been submitted successfully and is now being processed.'}</p>
                       <button className="cora-btn cora-btn-primary" onClick={reset} id="btn-new-order">
                         {I.plus} Create Another Order
                       </button>
