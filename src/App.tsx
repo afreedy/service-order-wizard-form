@@ -23,7 +23,7 @@ import type { CachedReferenceData, Form, PersistedDraft, PersistedForm, Persiste
 import { clearDraft, fromStoredMediaFile, getQueueSummary, loadDraft, saveDraft, toStoredMediaFile } from './lib/offlineStore'
 import { createClientSubmissionId, enqueueSubmission, processPendingQueue } from './lib/offlineQueue'
 import { readCachedReferenceData, writeCachedReferenceData } from './lib/referenceCache'
-import logoImage from './assets/logo.png'
+import logoImage from './assets/logo.png?inline'
 import './App.css'
 
 /* ═══════════════════════════════════════════════════════
@@ -182,6 +182,20 @@ const pad = (value: number) => String(value).padStart(2, '0')
 const formatDateInputValue = (date: Date) =>
   `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
 
+const fileToDataUrl = (file: Blob | File) =>
+  new Promise<string>((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => {
+      if (typeof reader.result === 'string') {
+        resolve(reader.result)
+        return
+      }
+      reject(new Error('Could not read image preview.'))
+    }
+    reader.onerror = () => reject(reader.error ?? new Error('Could not read image preview.'))
+    reader.readAsDataURL(file)
+  })
+
 const generateOrderTitle = () => {
   const now = new Date()
   const randomSuffix = Math.random().toString(36).slice(2, 6).toUpperCase()
@@ -223,16 +237,16 @@ const buildPersistedForm = (form: Form): PersistedForm => ({
   })),
 })
 
-const restorePersistedForm = (persisted: PersistedForm): Form => ({
+const restorePersistedForm = async (persisted: PersistedForm): Promise<Form> => ({
   ...persisted,
-  WasteItems: persisted.WasteItems.map((line): WasteLine => {
+  WasteItems: await Promise.all(persisted.WasteItems.map(async (line): Promise<WasteLine> => {
     const scalePhotoFile = fromStoredMediaFile(line.scalePhoto)
     return {
       id: line.id,
       WasteCategory: line.WasteCategory,
       Tonnage: line.Tonnage,
       scalePhotoFile: scalePhotoFile ?? undefined,
-      scalePhotoPreviewUrl: scalePhotoFile ? URL.createObjectURL(scalePhotoFile) : undefined,
+      scalePhotoPreviewUrl: scalePhotoFile ? await fileToDataUrl(scalePhotoFile) : undefined,
       scaleOcrCropPreviewUrl: line.scaleOcrCropPreviewDataUrl,
       scaleOcrCrop: line.scaleOcrCrop,
       scaleOcrStatus: line.scaleOcrStatus,
@@ -243,7 +257,7 @@ const restorePersistedForm = (persisted: PersistedForm): Form => ({
       scaleOcrError: line.scaleOcrError,
       scaleOcrRequestId: line.scaleOcrRequestId,
     }
-  }),
+  })),
 })
 
 const hasWasteLineValue = (line: WasteLine) =>
@@ -259,16 +273,33 @@ const getCompleteWasteLines = (lines: WasteLine[]) => lines.filter(isWasteLineCo
 const hasIncompleteWasteLine = (lines: WasteLine[]) =>
   lines.some((line) => hasWasteLineValue(line) && !isWasteLineComplete(line))
 
-const revokeScalePhotoPreviewUrls = (lines: WasteLine[]) => {
-  for (const line of lines) {
-    if (line.scalePhotoPreviewUrl) URL.revokeObjectURL(line.scalePhotoPreviewUrl)
-  }
-}
+const useFilePreviewDataUrl = (file: File | null) => {
+  const [previewUrl, setPreviewUrl] = useState('')
 
-const revokePreviewUrls = (urls: string[]) => {
-  for (const url of urls) {
-    URL.revokeObjectURL(url)
-  }
+  useEffect(() => {
+    let cancelled = false
+
+    if (!file) {
+      setPreviewUrl('')
+      return () => {
+        cancelled = true
+      }
+    }
+
+    void fileToDataUrl(file)
+      .then((url) => {
+        if (!cancelled) setPreviewUrl(url)
+      })
+      .catch(() => {
+        if (!cancelled) setPreviewUrl('')
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [file])
+
+  return previewUrl
 }
 
 const STEPS = [
@@ -1498,8 +1529,6 @@ function StepAssignment({
   }
 
   const removeWasteLine = (id: string) => {
-    const removedLine = form.WasteItems.find((line) => line.id === id)
-    if (removedLine?.scalePhotoPreviewUrl) URL.revokeObjectURL(removedLine.scalePhotoPreviewUrl)
     const nextLines = form.WasteItems.filter((line) => line.id !== id)
     set('WasteItems', nextLines.length > 0 ? nextLines : [createWasteLine()])
   }
@@ -1509,7 +1538,6 @@ function StepAssignment({
       ...current,
       WasteItems: current.WasteItems.map((line) => {
         if (line.id !== id) return line
-        if (line.scalePhotoPreviewUrl) URL.revokeObjectURL(line.scalePhotoPreviewUrl)
         return {
           ...line,
           scalePhotoPreviewUrl: undefined,
@@ -1586,12 +1614,11 @@ function StepAssignment({
     }
 
     const requestId = `scale-ocr-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-    const previewUrl = URL.createObjectURL(file)
+    const previewUrl = await fileToDataUrl(file)
     updateForm((current) => ({
       ...current,
       WasteItems: current.WasteItems.map((line) => {
         if (line.id !== id) return line
-        if (line.scalePhotoPreviewUrl) URL.revokeObjectURL(line.scalePhotoPreviewUrl)
         return {
           ...line,
           scalePhotoFile: file,
@@ -2203,7 +2230,6 @@ function App() {
   const [queuePendingCount, setQueuePendingCount] = useState(0)
   const [queueLastError, setQueueLastError] = useState('')
   const [queueSyncing, setQueueSyncing] = useState(false)
-  const scalePhotoPreviewUrlsRef = useRef<string[]>([])
 
   const refreshQueueState = useCallback(async () => {
     const summary = await getQueueSummary()
@@ -2221,7 +2247,6 @@ function App() {
       await processPendingQueue({
         onSubmissionSynced: (item) => {
           if (item.clientSubmissionId === draftClientSubmissionId && submissionMode === 'queued') {
-            revokeScalePhotoPreviewUrls(form.WasteItems)
             setForm(createBlankForm())
             setSignatureDataUrl('')
             setBeforePhotoFile(null)
@@ -2327,8 +2352,7 @@ function App() {
           setLoadState('loaded')
         }
         if (draft) {
-          revokePreviewUrls(scalePhotoPreviewUrlsRef.current)
-          setForm(restorePersistedForm(draft.payload.form))
+          setForm(await restorePersistedForm(draft.payload.form))
           setSignatureDataUrl(draft.payload.signatureDataUrl)
           setBeforePhotoFile(fromStoredMediaFile(draft.payload.beforePhoto))
           setAfterPhotoFile(fromStoredMediaFile(draft.payload.afterPhoto))
@@ -2409,18 +2433,6 @@ function App() {
     void syncQueuedSubmissions()
   }, [draftReady, syncQueuedSubmissions])
 
-  useEffect(() => {
-    scalePhotoPreviewUrlsRef.current = form.WasteItems
-      .map((line) => line.scalePhotoPreviewUrl)
-      .filter((value): value is string => Boolean(value))
-  }, [form.WasteItems])
-
-  useEffect(() => () => {
-    for (const previewUrl of scalePhotoPreviewUrlsRef.current) {
-      URL.revokeObjectURL(previewUrl)
-    }
-  }, [])
-
   /* ── Helpers ── */
   const set = useCallback(<K extends keyof Form>(k: K, v: Form[K]) => setForm((p) => ({ ...p, [k]: v })), [])
 
@@ -2489,26 +2501,10 @@ function App() {
     [drivers],
   )
 
-  const beforePhotoPreviewUrl = useMemo(
-    () => (beforePhotoFile ? URL.createObjectURL(beforePhotoFile) : ''),
-    [beforePhotoFile],
-  )
-
-  const afterPhotoPreviewUrl = useMemo(
-    () => (afterPhotoFile ? URL.createObjectURL(afterPhotoFile) : ''),
-    [afterPhotoFile],
-  )
-
-  useEffect(() => () => {
-    if (beforePhotoPreviewUrl) URL.revokeObjectURL(beforePhotoPreviewUrl)
-  }, [beforePhotoPreviewUrl])
-
-  useEffect(() => () => {
-    if (afterPhotoPreviewUrl) URL.revokeObjectURL(afterPhotoPreviewUrl)
-  }, [afterPhotoPreviewUrl])
+  const beforePhotoPreviewUrl = useFilePreviewDataUrl(beforePhotoFile)
+  const afterPhotoPreviewUrl = useFilePreviewDataUrl(afterPhotoFile)
 
   const reset = useCallback(() => {
-    revokeScalePhotoPreviewUrls(form.WasteItems)
     setForm(createBlankForm())
     setSignatureDataUrl('')
     setBeforePhotoFile(null)
@@ -2563,7 +2559,6 @@ function App() {
         WasteItems: [createWasteLine()],
         Notes: '',
       }))
-      revokeScalePhotoPreviewUrls(form.WasteItems)
       setToast({ type: 'success', text: 'Assignment fields cleared.' })
       return
     }

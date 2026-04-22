@@ -1,7 +1,7 @@
 /* ═══════════════════════════════════════════════════
    CORA Environment — Service Order Wizard
    Design system: 5 surface levels, 4 shadow tiers,
-   Bricolage Grotesque + DM Sans, spring transitions
+   Native sans-serif typography, spring transitions
    ═══════════════════════════════════════════════════ */
 
 /* ── Tokens ── */
@@ -59,8 +59,8 @@
   --dur-slow: 400ms;
 
   /* Fonts */
-  --f-display: 'Bricolage Grotesque', serif;
-  --f-body: 'DM Sans', sans-serif;
+  --f-display: "Segoe UI", Tahoma, Geneva, Verdana, Arial, sans-serif;
+  --f-body: "Segoe UI", Tahoma, Geneva, Verdana, Arial, sans-serif;
 }
 
 /* ═══ App shell ═══ */
