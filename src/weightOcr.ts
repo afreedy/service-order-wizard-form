@@ -1,4 +1,5 @@
 import Tesseract from 'tesseract.js'
+import { RecognizeScaleTextService } from './generated/services/RecognizeScaleTextService'
 
 export type ScaleOcrStatus = 'idle' | 'reading' | 'done' | 'error'
 
@@ -56,6 +57,7 @@ const MIN_PLAUSIBLE_DISPLAY_VALUE = 0
 const MAX_PLAUSIBLE_DISPLAY_VALUE = 100000
 const MIN_RELIABLE_SCORE = 120
 const MIN_RELIABLE_CONFIDENCE = 70
+const ENABLE_LOCAL_OCR = false
 
 interface Bbox {
   left: number
@@ -97,20 +99,39 @@ const getWeightOcrWorker = async () => {
   return workerPromise
 }
 
-const loadImageFile = (file: File) =>
-  new Promise<HTMLImageElement>((resolve, reject) => {
-    const url = URL.createObjectURL(file)
-    const image = new Image()
-    image.onload = () => {
-      URL.revokeObjectURL(url)
-      resolve(image)
+const blobToDataUrl = (file: Blob) =>
+  new Promise<string>((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => {
+      if (typeof reader.result === 'string') {
+        resolve(reader.result)
+        return
+      }
+      reject(new Error('Could not prepare the scale photo for OCR.'))
     }
-    image.onerror = () => {
-      URL.revokeObjectURL(url)
-      reject(new Error(`Could not load ${file.name}.`))
-    }
-    image.src = url
+    reader.onerror = () => reject(reader.error ?? new Error('Could not prepare the scale photo for OCR.'))
+    reader.readAsDataURL(file)
   })
+
+const loadImageUrl = (src: string, errorMessage: string) =>
+  new Promise<HTMLImageElement>((resolve, reject) => {
+    const image = new Image()
+    image.onload = () => resolve(image)
+    image.onerror = () => reject(new Error(errorMessage))
+    image.src = src
+  })
+
+const loadImageFile = async (file: File) => {
+  const dataUrl = await blobToDataUrl(file)
+  return loadImageUrl(dataUrl, `Could not load ${file.name}.`)
+}
+
+const loadImageSource = (source: File | string) => {
+  if (typeof source === 'string') {
+    return loadImageUrl(source, 'Could not load the scale photo.')
+  }
+  return loadImageFile(source)
+}
 
 const cloneImageData = (imageData: ImageData) => new ImageData(new Uint8ClampedArray(imageData.data), imageData.width, imageData.height)
 
@@ -456,8 +477,8 @@ const imageDataToUrl = (imageData: ImageData, options: ImageVariantOptions) => {
   return canvas.toDataURL('image/png')
 }
 
-export const preprocessImageForOcr = async (file: File, cropRect?: CropRect): Promise<OcrPreprocessResult> => {
-  const image = await loadImageFile(file)
+export const preprocessImageForOcr = async (source: File | string, cropRect?: CropRect): Promise<OcrPreprocessResult> => {
+  const image = await loadImageSource(source)
   const upscale = Math.max(1, MIN_OCR_WIDTH / image.naturalWidth)
   const downscale = MAX_OCR_WIDTH / image.naturalWidth
   const scale = Math.min(upscale, downscale)
@@ -483,7 +504,7 @@ export const preprocessImageForOcr = async (file: File, cropRect?: CropRect): Pr
   }
 
   const selectedCrop = cropImageData(imageData, selectedBbox)
-  const sevenSegmentText = recognizeSevenSegmentText(selectedCrop)
+  const sevenSegmentText = ENABLE_LOCAL_OCR ? recognizeSevenSegmentText(selectedCrop) : ''
   const imageDataVariants = cropRect
     ? [selectedCrop]
     : [
@@ -620,6 +641,12 @@ const isCleanUnitlessNumber = (candidate: OcrCandidate) => {
   return compactText === candidate.parsed.rawNumber && isPlausibleDisplayValue(candidate.parsed.displayValue)
 }
 
+const isMicrosoftOnlyCandidate = (candidate: OcrCandidate) =>
+  !ENABLE_LOCAL_OCR &&
+  candidate.source === 'remote' &&
+  isPlausibleDisplayValue(candidate.parsed.displayValue) &&
+  candidate.confidence >= MIN_RELIABLE_CONFIDENCE
+
 const createOcrCandidate = (
   text: string,
   source: OcrSource,
@@ -641,10 +668,16 @@ const createOcrCandidate = (
   const plausibleScore = plausible ? 24 : -80
   const textScore = Math.min(8, text.trim().length)
   const sourceScore = source === 'remote' ? 14 : source === 'merged' ? 10 : source === 'sevenSegment' ? 6 : 0
+  const microsoftOnlyScore = !ENABLE_LOCAL_OCR && source === 'remote' && plausible ? 42 : 0
   const score = parsed.suggestion
-    ? confidence + unitScore + decimalScore + plausibleScore + textScore + sourceScore + sourceBoost
+    ? confidence + unitScore + decimalScore + plausibleScore + textScore + sourceScore + sourceBoost + microsoftOnlyScore
     : 0
-  const reliable = score >= MIN_RELIABLE_SCORE && confidence >= MIN_RELIABLE_CONFIDENCE && plausible && hasUnit
+  const reliable = (
+    score >= MIN_RELIABLE_SCORE &&
+    confidence >= MIN_RELIABLE_CONFIDENCE &&
+    plausible &&
+    (hasUnit || (!ENABLE_LOCAL_OCR && source === 'remote'))
+  )
 
   return { source, text, parsed, confidence, score, reliable, reasons }
 }
@@ -659,7 +692,7 @@ const selectBestOcrResult = (candidates: OcrCandidate[], rawTexts: string[]): Oc
       return {
         ...candidate,
         score: candidate.score + agreementBonusCount * 18,
-        reliable: candidate.reliable || (
+        reliable: candidate.reliable || isMicrosoftOnlyCandidate(candidate) || (
           candidate.score + agreementBonusCount * 18 >= MIN_RELIABLE_SCORE &&
           candidate.confidence >= MIN_RELIABLE_CONFIDENCE &&
           (candidate.parsed.unit !== 'unknown' || cleanUnitlessWithAgreement)
@@ -703,6 +736,14 @@ const dataUrlToBlob = async (dataUrl: string) => {
   return response.blob()
 }
 
+const dataUrlToFlowFile = (dataUrl: string) => {
+  const match = dataUrl.match(/^data:([^;,]+);base64,(.*)$/)
+  if (!match) return { contentBytes: dataUrl, name: 'scale-crop.png' }
+  const [, mimeType, contentBytes] = match
+  const extension = mimeType === 'image/jpeg' ? 'jpg' : mimeType === 'image/bmp' ? 'bmp' : 'png'
+  return { contentBytes, name: `scale-crop.${extension}` }
+}
+
 const getRemoteOcrEndpoint = () => String(import.meta.env.VITE_WEIGHT_OCR_ENDPOINT ?? '').trim()
 
 const getRemoteTextItems = (payload: unknown): { text: string; confidence: number }[] => {
@@ -731,19 +772,34 @@ const getRemoteTextItems = (payload: unknown): { text: string; confidence: numbe
 }
 
 const runRemoteWeightOcr = async (imageDataUrl?: string) => {
+  const candidates: OcrCandidate[] = []
+
+  if (imageDataUrl) {
+    try {
+      const result = await RecognizeScaleTextService.Run({
+        file: dataUrlToFlowFile(imageDataUrl),
+      })
+      candidates.push(...getRemoteTextItems(result.data).map((item) => createOcrCandidate(item.text, 'remote', item.confidence)))
+    } catch {
+      // Keep local/browser OCR usable when the Power Apps host or flow connection is unavailable.
+    }
+  }
+
   const endpoint = getRemoteOcrEndpoint()
-  if (!endpoint || !imageDataUrl) return []
+  if (!endpoint || !imageDataUrl) return candidates
 
   try {
     const body = new FormData()
     body.append('image', await dataUrlToBlob(imageDataUrl), 'scale-crop.jpg')
     const response = await fetch(endpoint, { method: 'POST', body })
-    if (!response.ok) return []
+    if (!response.ok) return candidates
     const payload: unknown = await response.json()
-    return getRemoteTextItems(payload).map((item) => createOcrCandidate(item.text, 'remote', item.confidence))
+    candidates.push(...getRemoteTextItems(payload).map((item) => createOcrCandidate(item.text, 'remote', item.confidence)))
   } catch {
-    return []
+    return candidates
   }
+
+  return candidates
 }
 
 export const runWeightOcr = async (
@@ -752,42 +808,45 @@ export const runWeightOcr = async (
   options: { remoteImageDataUrl?: string } = {},
 ): Promise<OcrResult> => {
   const run = async () => {
-    const worker = await getWeightOcrWorker()
     const imageVariants = Array.isArray(imageDataUrls) ? imageDataUrls : [imageDataUrls]
-    const pageSegModes = [Tesseract.PSM.SINGLE_LINE, Tesseract.PSM.SPARSE_TEXT]
     const candidates: OcrCandidate[] = []
     const rawTexts: string[] = []
-    const unitTexts: string[] = []
-    const numericTexts: string[] = [...candidateTexts]
 
     candidates.push(...await runRemoteWeightOcr(options.remoteImageDataUrl ?? imageVariants[0]))
 
-    for (const candidateText of candidateTexts) {
-      candidates.push(createOcrCandidate(candidateText, 'sevenSegment', 82))
-    }
+    if (ENABLE_LOCAL_OCR) {
+      const worker = await getWeightOcrWorker()
+      const pageSegModes = [Tesseract.PSM.SINGLE_LINE, Tesseract.PSM.SPARSE_TEXT]
+      const unitTexts: string[] = []
+      const numericTexts: string[] = [...candidateTexts]
 
-    for (const imageDataUrl of imageVariants) {
-      for (const pageSegMode of pageSegModes) {
-        for (const whitelist of [OCR_CHAR_WHITELIST, OCR_NUMBER_WHITELIST]) {
-          await worker.setParameters({
-            tessedit_char_whitelist: whitelist,
-            tessedit_pageseg_mode: pageSegMode,
-          })
-          const result = await worker.recognize(imageDataUrl)
-          const rawText = result.data.text
-          rawTexts.push(rawText)
-          if (whitelist === OCR_CHAR_WHITELIST) unitTexts.push(rawText)
-          else numericTexts.push(rawText)
-          candidates.push(createOcrCandidate(rawText, 'tesseract', result.data.confidence))
+      for (const candidateText of candidateTexts) {
+        candidates.push(createOcrCandidate(candidateText, 'sevenSegment', 82))
+      }
+
+      for (const imageDataUrl of imageVariants) {
+        for (const pageSegMode of pageSegModes) {
+          for (const whitelist of [OCR_CHAR_WHITELIST, OCR_NUMBER_WHITELIST]) {
+            await worker.setParameters({
+              tessedit_char_whitelist: whitelist,
+              tessedit_pageseg_mode: pageSegMode,
+            })
+            const result = await worker.recognize(imageDataUrl)
+            const rawText = result.data.text
+            rawTexts.push(rawText)
+            if (whitelist === OCR_CHAR_WHITELIST) unitTexts.push(rawText)
+            else numericTexts.push(rawText)
+            candidates.push(createOcrCandidate(rawText, 'tesseract', result.data.confidence))
+          }
         }
       }
-    }
 
-    for (const numericText of numericTexts) {
-      for (const unitText of unitTexts) {
-        const mergedText = mergeNumericAndUnitText(numericText, unitText)
-        if (!mergedText) continue
-        candidates.push(createOcrCandidate(mergedText, 'merged', 80, 4))
+      for (const numericText of numericTexts) {
+        for (const unitText of unitTexts) {
+          const mergedText = mergeNumericAndUnitText(numericText, unitText)
+          if (!mergedText) continue
+          candidates.push(createOcrCandidate(mergedText, 'merged', 80, 4))
+        }
       }
     }
 

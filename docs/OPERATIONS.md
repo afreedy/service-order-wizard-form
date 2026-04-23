@@ -70,6 +70,8 @@ The app posts the selected crop image as multipart form data with an `image` fie
 
 The endpoint can also return top-level `text` and `confidence` fields. Keep cloud OCR credentials on the server side; Vite environment variables are bundled for browser use.
 
+For Microsoft Power Apps OCR, prefer an AI Builder Text recognition flow added as a generated Code Apps data source instead of exposing an HTTP trigger URL to the browser. See [Power Apps OCR integration](POWER-APPS-OCR.md).
+
 ## Deployment checklist
 
 Before publishing:

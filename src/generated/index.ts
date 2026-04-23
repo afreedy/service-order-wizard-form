@@ -10,6 +10,7 @@ export * as Customer_area_data_cleanModel from './models/Customer_area_data_clea
 export * as Customer_area_data_clean_finalModel from './models/Customer_area_data_clean_finalModel';
 export * as Drivers1Model from './models/Drivers1Model';
 export * as DriversModel from './models/DriversModel';
+export * as RecognizeScaleTextModel from './models/RecognizeScaleTextModel';
 export * as ServiceOrderProofQueueModel from './models/ServiceOrderProofQueueModel';
 export * as ServiceOrderWasteItemsModel from './models/ServiceOrderWasteItemsModel';
 export * as ServiceOrdersModel from './models/ServiceOrdersModel';
@@ -23,6 +24,7 @@ export * from './services/Customer_area_data_cleanService';
 export * from './services/Customer_area_data_clean_finalService';
 export * from './services/Drivers1Service';
 export * from './services/DriversService';
+export * from './services/RecognizeScaleTextService';
 export * from './services/ServiceOrderProofQueueService';
 export * from './services/ServiceOrderWasteItemsService';
 export * from './services/ServiceOrdersService';

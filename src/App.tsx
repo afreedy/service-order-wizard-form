@@ -528,16 +528,11 @@ function CustomSelect({
   const filteredOptions = normalizedSearch
     ? options.filter((option) => option.label.toLowerCase().includes(normalizedSearch))
     : options
-  const selectedIndex = filteredOptions.findIndex((option) => option.value === value)
-
-  useEffect(() => {
-    if (!isOpen) return
-    setActiveIndex((current) => {
-      if (filteredOptions.length === 0) return -1
-      if (current >= 0 && current < filteredOptions.length) return current
-      return selectedIndex >= 0 ? selectedIndex : 0
-    })
-  }, [filteredOptions, isOpen, selectedIndex])
+  const getInitialActiveIndex = useCallback((nextOptions: { value: string, label: string }[]) => {
+    if (nextOptions.length === 0) return -1
+    const nextSelectedIndex = nextOptions.findIndex((option) => option.value === value)
+    return nextSelectedIndex >= 0 ? nextSelectedIndex : 0
+  }, [value])
 
   useEffect(() => {
     if (!isOpen) return
@@ -569,8 +564,18 @@ function CustomSelect({
 
   const openMenu = useCallback(() => {
     if (disabled) return
+    setActiveIndex(getInitialActiveIndex(filteredOptions))
     setIsOpen(true)
-  }, [disabled])
+  }, [disabled, filteredOptions, getInitialActiveIndex])
+
+  const handleSearchChange = (nextSearchTerm: string) => {
+    const nextNormalizedSearch = nextSearchTerm.trim().toLowerCase()
+    const nextFilteredOptions = nextNormalizedSearch
+      ? options.filter((option) => option.label.toLowerCase().includes(nextNormalizedSearch))
+      : options
+    setSearchTerm(nextSearchTerm)
+    setActiveIndex(getInitialActiveIndex(nextFilteredOptions))
+  }
 
   const moveActiveIndex = useCallback((direction: 1 | -1) => {
     if (!filteredOptions.length) return
@@ -702,7 +707,7 @@ function CustomSelect({
                 ref={searchInputRef}
                 className="cora-custom-select-search"
                 value={searchTerm}
-                onChange={(event) => setSearchTerm(event.target.value)}
+                onChange={(event) => handleSearchChange(event.target.value)}
                 onKeyDown={handleSearchKeyDown}
                 placeholder={searchPlaceholder ?? 'Search options...'}
                 aria-label={searchPlaceholder ?? 'Search options'}
@@ -755,12 +760,17 @@ function CustomDatePicker({ id, value, onChange, disabled }: { id: string, value
     return () => document.removeEventListener('pointerdown', handleClickOutside)
   }, [])
 
-  useEffect(() => {
-    if (!isOpen) return
+  const syncCalendarToValue = useCallback(() => {
     const baseDate = parseIsoDate(value) ?? new Date()
     setViewDate(new Date(baseDate.getFullYear(), baseDate.getMonth(), 1))
     setFocusedDate(baseDate)
-  }, [isOpen, value])
+  }, [value])
+
+  const openCalendar = useCallback(() => {
+    if (disabled) return
+    syncCalendarToValue()
+    setIsOpen(true)
+  }, [disabled, syncCalendarToValue])
 
   const currentYear = viewDate.getFullYear()
   const currentMonth = viewDate.getMonth()
@@ -821,7 +831,7 @@ function CustomDatePicker({ id, value, onChange, disabled }: { id: string, value
     if (disabled) return
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp' || event.key === 'Enter' || event.key === ' ') {
       event.preventDefault()
-      setIsOpen(true)
+      openCalendar()
       return
     }
     if (event.key === 'Escape' && isOpen) {
@@ -893,7 +903,14 @@ function CustomDatePicker({ id, value, onChange, disabled }: { id: string, value
         type="button"
         id={id}
         className={`cora-custom-select-trigger ${!value ? 'placeholder' : ''}`}
-        onClick={() => !disabled && setIsOpen(!isOpen)}
+        onClick={() => {
+          if (disabled) return
+          if (isOpen) {
+            closeCalendar(false)
+            return
+          }
+          openCalendar()
+        }}
         onKeyDown={handleTriggerKeyDown}
         aria-haspopup="dialog"
         aria-expanded={isOpen}
@@ -2407,9 +2424,9 @@ function StepAssignment({
     }))
   }
 
-  const runOcrForLine = async (id: string, file: File, requestId: string, crop?: CropRect) => {
+  const runOcrForLine = async (id: string, imageSource: string, requestId: string, crop?: CropRect) => {
     try {
-      const preprocessed = await preprocessImageForOcr(file, crop)
+      const preprocessed = await preprocessImageForOcr(imageSource, crop)
       const result = await runWeightOcr(preprocessed.imageDataUrls, preprocessed.candidateTexts, {
         remoteImageDataUrl: preprocessed.cropPreviewUrl,
       })
@@ -2489,9 +2506,9 @@ function StepAssignment({
     setCropEditingLineId(id)
   }
 
-  const applyScaleCrop = (id: string, crop: CropRect) => {
+  const applyScaleCrop = (id: string, crop: CropRect, imageSource: string) => {
     const line = form.WasteItems.find((item) => item.id === id)
-    if (!line?.scalePhotoFile) return
+    if (!line) return
     const requestId = `scale-ocr-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
     setCropEditingLineId(null)
     updateWasteLine(id, {
@@ -2504,7 +2521,7 @@ function StepAssignment({
       scaleOcrRequestId: requestId,
       scaleOcrCrop: crop,
     })
-    void runOcrForLine(id, line.scalePhotoFile, requestId, crop)
+    void runOcrForLine(id, imageSource, requestId, crop)
   }
 
   const applyScaleSuggestion = (id: string) => {
@@ -2527,7 +2544,7 @@ function StepAssignment({
           imageUrl={cropEditingLine.scalePhotoPreviewUrl}
           initialCrop={cropEditingLine.scaleOcrCrop}
           onCancel={() => setCropEditingLineId(null)}
-          onApply={(crop) => applyScaleCrop(cropEditingLine.id, crop)}
+          onApply={(crop) => applyScaleCrop(cropEditingLine.id, crop, cropEditingLine.scalePhotoPreviewUrl!)}
         />
       )}
       <div className="cora-section-divider"><span>Resource Assignment</span></div>
@@ -3138,7 +3155,7 @@ function App() {
       setQueueSyncing(false)
       await refreshQueueState()
     }
-  }, [draftClientSubmissionId, form.WasteItems, refreshQueueState, submissionMode])
+  }, [draftClientSubmissionId, refreshQueueState, submissionMode])
 
   const loadReferenceData = useCallback(async () => {
     setLoadState('loading')
@@ -3386,7 +3403,7 @@ function App() {
     setDraftClientSubmissionId(createClientSubmissionId())
     setSubmitting(false)
     void clearDraft()
-  }, [form.WasteItems])
+  }, [])
 
   const clearCurrentStepFields = useCallback(() => {
     if (submitting || submitted) return
@@ -3442,7 +3459,7 @@ function App() {
     }
 
     setToast({ type: 'error', text: 'There are no editable fields to clear on the review page.' })
-  }, [form.WasteItems, step, submitted, submitting])
+  }, [step, submitted, submitting])
 
   const persistReferenceCache = useCallback(async (next: Partial<CachedReferenceData>) => {
     const record: CachedReferenceData = {

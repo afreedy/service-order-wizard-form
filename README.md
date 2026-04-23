@@ -117,6 +117,7 @@ Start here:
 - [Architecture](docs/ARCHITECTURE.md)
 - [Data model](docs/DATA-MODEL.md)
 - [Operations](docs/OPERATIONS.md)
+- [Power Apps OCR integration](docs/POWER-APPS-OCR.md)
 
 ## Admin access
 

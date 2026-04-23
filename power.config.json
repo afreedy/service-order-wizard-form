@@ -65,6 +65,18 @@
           }
         }
       }
+    },
+    "0dee87fc-630a-4c51-aa01-d6778bdf5a40": {
+      "id": "/providers/Microsoft.PowerApps/apis/shared_logicflows",
+      "displayName": "Logic flows",
+      "dataSources": [
+        "recognizescaletext"
+      ],
+      "workflowDetails": {
+        "workflowEntityId": "32c9df75-f33e-f111-88b4-6045bd1ff239",
+        "workflowDisplayName": "RecognizeScaleText",
+        "workflowName": "ac3e220a-35f3-a656-0613-2e09c33e8765"
+      }
     }
   },
   "databaseReferences": {}
