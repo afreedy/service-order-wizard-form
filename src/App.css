@@ -703,6 +703,14 @@
   line-height: 1.35;
 }
 
+.cora-field-error {
+  margin: 6px 0 0;
+  color: var(--error);
+  font-size: 0.76rem;
+  line-height: 1.4;
+  font-weight: 600;
+}
+
 .cora-section-divider {
   grid-column: 1 / -1;
   display: flex;
@@ -763,6 +771,12 @@
 .cora-textarea:focus {
   border-color: var(--b-focus);
   box-shadow: 0 0 0 3px var(--cora-green-muted);
+}
+
+.cora-input.invalid,
+.cora-textarea.invalid {
+  border-color: rgba(220, 38, 38, 0.42);
+  box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.12);
 }
 
 .cora-textarea {
@@ -2056,6 +2070,25 @@
   margin-bottom: 4px;
 }
 
+.cora-admin-customer-manage {
+  grid-template-columns: 1fr;
+}
+
+.cora-admin-toolbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+}
+
+.cora-admin-toolbar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 10px;
+}
+
 .cora-admin-submit-field {
   align-self: end;
 }
@@ -2125,6 +2158,35 @@
   line-height: 1.35;
 }
 
+.cora-admin-customer-item {
+  align-items: start;
+}
+
+.cora-admin-customer-summary {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.cora-admin-customer-meta {
+  color: var(--tx-secondary);
+  font-size: 0.8rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.cora-admin-customer-edit-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  min-width: 0;
+}
+
+.cora-admin-inline-edit {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
 .cora-admin-crud-actions {
   display: flex;
   flex-wrap: wrap;
@@ -2135,7 +2197,7 @@
 
 .cora-admin-crud-actions .cora-btn {
   flex: 0 1 auto;
-  min-height: 34px;
+  min-height: 44px;
   padding: 6px 14px;
   font-size: 0.78rem;
 }
@@ -2169,9 +2231,27 @@
     padding: 16px 14px;
   }
 
+  .cora-admin-toolbar {
+    grid-template-columns: 1fr;
+  }
+
+  .cora-admin-toolbar-actions {
+    justify-content: stretch;
+  }
+
+  .cora-admin-toolbar-actions .cora-btn,
+  .cora-admin-toolbar-actions .cora-table-filter-badge {
+    width: 100%;
+    justify-content: center;
+  }
+
   .cora-admin-crud-item {
     grid-template-columns: 1fr;
     padding: 12px 14px;
+  }
+
+  .cora-admin-customer-edit-grid {
+    grid-template-columns: 1fr;
   }
 
   .cora-admin-crud-actions {
@@ -2193,6 +2273,7 @@
   width: 100%;
   border-collapse: collapse;
   min-width: 0;
+  table-layout: fixed;
 }
 
 .cora-review-table th {
@@ -2210,31 +2291,38 @@
   color: var(--tx-primary);
   border-bottom: 1px solid var(--b1);
   word-break: break-word;
+  vertical-align: top;
+}
+
+.cora-review-table-summary .cora-review-cell-label {
+  width: clamp(120px, 38%, 160px);
+  font-weight: 600;
+  color: var(--tx-secondary);
+}
+
+.cora-review-table-summary .cora-review-cell-value {
+  overflow-wrap: anywhere;
+}
+
+.cora-review-table-waste th:first-child,
+.cora-review-table-waste td:first-child {
+  width: 65%;
 }
 
 .cora-review-table tbody tr:last-child td { border-bottom: none; }
 
-@media (max-width: 480px) {
-  .cora-review-table table,
-  .cora-review-table tbody,
-  .cora-review-table tr,
-  .cora-review-table td {
-    display: block;
-    width: 100%;
-  }
-
+@media (max-width: 640px) {
   .cora-review-table td {
     padding: 9px 12px;
     font-size: 0.82rem;
   }
 
-  .cora-review-table td:first-child {
-    padding-bottom: 2px;
-    width: auto !important;
+  .cora-review-table th {
+    padding: 9px 12px;
   }
 
-  .cora-review-table td + td {
-    padding-top: 2px;
+  .cora-review-table-summary .cora-review-cell-label {
+    width: 42%;
   }
 }
 
@@ -2268,6 +2356,9 @@
   align-items: center;
   justify-content: center;
   padding: 18px;
+  min-height: 100vh;
+  min-height: 100svh;
+  min-height: 100dvh;
   background: rgba(12, 59, 58, 0.4);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
@@ -2282,6 +2373,8 @@
 .cora-modal {
   width: min(520px, 100%);
   max-height: calc(100vh - 36px);
+  max-height: calc(100svh - 36px);
+  max-height: calc(100dvh - 36px);
   border-radius: var(--r-xl);
   background: var(--s1);
   border: 1px solid rgba(255, 255, 255, 0.4);
@@ -2445,13 +2538,21 @@
 
 @media (max-width: 520px) {
   .cora-modal-backdrop {
-    align-items: flex-end;
-    padding: 12px;
+    align-items: center;
+    justify-content: center;
+    padding:
+      max(12px, env(safe-area-inset-top))
+      max(12px, env(safe-area-inset-right))
+      max(12px, env(safe-area-inset-bottom))
+      max(12px, env(safe-area-inset-left));
   }
 
   .cora-modal {
+    width: min(520px, 100%);
     max-height: calc(100vh - 24px);
-    border-radius: var(--r-lg) var(--r-lg) 0 0;
+    max-height: calc(100svh - 24px);
+    max-height: calc(100dvh - 24px);
+    border-radius: var(--r-lg);
   }
 
   .cora-modal-head {
@@ -2505,6 +2606,27 @@
   min-width: 0;
 }
 
+.cora-toast-icon,
+.cora-toast-text {
+  min-width: 0;
+}
+
+.cora-toast-text {
+  flex: 1 1 auto;
+}
+
+.cora-toast-action {
+  border: 1px solid currentColor;
+  background: transparent;
+  color: inherit;
+  border-radius: 999px;
+  min-height: 36px;
+  padding: 6px 12px;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
 .cora-toast.success {
   background: var(--success-bg);
   border: 1px solid rgba(22,163,74,0.15);
@@ -2549,6 +2671,21 @@
   .cora-toast {
     font-size: 0.82rem;
     padding: 12px 16px;
+    flex-wrap: wrap;
+  }
+}
+
+.cora-admin-customer-modal {
+  width: min(760px, 100%);
+}
+
+.cora-admin-customer-modal-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+@media (max-width: 640px) {
+  .cora-admin-customer-modal-grid {
+    grid-template-columns: 1fr;
   }
 }
 

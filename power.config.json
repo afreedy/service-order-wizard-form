@@ -23,7 +23,8 @@
         "waste_categories",
         "customer-area-data",
         "customer-area-data-clean",
-        "customer-area-data-clean-final"
+        "customer-area-data-clean-final",
+        "customer_area_data_clean_final"
       ],
       "dataSets": {
         "https://coraenv-my.sharepoint.com/personal/bizdev_cora-environment_com": {
@@ -56,6 +57,9 @@
               "tableName": "b6f24928-7b5f-4ef3-ba71-82a2e2669a54"
             },
             "customer-area-data-clean-final": {
+              "tableName": "405526ea-7b2b-493c-a370-ba8242a2c264"
+            },
+            "customer_area_data_clean_final": {
               "tableName": "405526ea-7b2b-493c-a370-ba8242a2c264"
             }
           }

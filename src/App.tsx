@@ -8,7 +8,7 @@ import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import type { ChangeEvent, DragEvent, PointerEvent, ReactNode } from 'react'
 import { getContext } from '@microsoft/power-apps/app'
 import type { Drivers1Read } from './generated/models/Drivers1Model'
-import type { Customer_area_data_clean_finalRead } from './generated/models/Customer_area_data_clean_finalModel'
+import type { Customer_area_data_clean_finalRead, Customer_area_data_clean_finalWrite } from './generated/models/Customer_area_data_clean_finalModel'
 import type { VehiclesRead, VehiclesWrite } from './generated/models/VehiclesModel'
 import type { Waste_CategoriesRead, Waste_CategoriesWrite } from './generated/models/Waste_CategoriesModel'
 import type { ServiceOrdersRead } from './generated/models/ServiceOrdersModel'
@@ -58,14 +58,39 @@ const I = {
    ═══════════════════════════════════════════════════════ */
 type Load = 'loading' | 'loaded' | 'error'
 type View = 'form' | 'list' | 'admin'
-type AdminTab = 'drivers' | 'vehicles' | 'waste'
+type AdminTab = 'customers' | 'drivers' | 'vehicles' | 'waste'
 type ProtectedDestination = { view: 'list' } | { view: 'admin'; tab: AdminTab }
 type SubmissionMode = 'draft' | 'queued'
 
-interface Toast { type: 'success' | 'error'; text: string }
+interface Toast {
+  type: 'success' | 'error'
+  text: string
+  actionLabel?: string
+  onAction?: () => void
+  durationMs?: number
+}
 
 type DriverOptionSource = Drivers1Read
 type CustomerAreaOption = Customer_area_data_clean_finalRead
+type CustomerAdminForm = {
+  Title: string
+  field_1: string
+  field_2: string
+  field_3: string
+  field_4: string
+  field_5: string
+  field_6: string
+  field_7: string
+  field_8: string
+  field_9: string
+}
+type CustomerAdminFieldKey = keyof CustomerAdminForm
+type CustomerAdminErrors = Partial<Record<CustomerAdminFieldKey, string>>
+type DeleteTarget =
+  | { tab: 'customers'; id: number; name: string }
+  | { tab: 'drivers'; id: number; name: string }
+  | { tab: 'vehicles'; id: number; name: string }
+  | { tab: 'waste'; id: number; name: string }
 type CustomerLevelField =
   | 'CustomerName'
   | 'CustomerLocation'
@@ -108,6 +133,18 @@ const getDriverName = (row: DriverOptionSource) => {
 
 const uniqueValues = (values: string[]) => Array.from(new Set(values.filter(Boolean)))
 const readString = (value: unknown) => (typeof value === 'string' ? value.trim() : '')
+const createEmptyCustomerAdminForm = (): CustomerAdminForm => ({
+  Title: '',
+  field_1: '',
+  field_2: '',
+  field_3: '',
+  field_4: '',
+  field_5: '',
+  field_6: '',
+  field_7: '',
+  field_8: '',
+  field_9: '',
+})
 
 const getCustomerName = (row: CustomerAreaOption) => row.Title?.trim() || ''
 const getCustomerArea = (row: CustomerAreaOption) => {
@@ -175,6 +212,87 @@ const getCustomerLevelOptions = (rows: CustomerAreaOption[], form: Form, levelIn
       .filter((row) => rowMatchesCustomerPath(row, form, levelIndex))
       .map((row) => getCustomerLevelValue(row, levelIndex)),
   ).sort((a, b) => a.localeCompare(b))
+}
+
+const CUSTOMER_ADMIN_FIELDS: { key: keyof CustomerAdminForm; label: string; placeholder: string; required?: boolean }[] = [
+  { key: 'Title', label: 'Customer Name', placeholder: 'Enter customer name', required: true },
+  { key: 'field_1', label: 'Location', placeholder: 'Enter location', required: true },
+  { key: 'field_2', label: 'Sub-location / Path', placeholder: 'Enter sub-location or slash-delimited path' },
+  { key: 'field_3', label: 'Level 4', placeholder: 'Optional level 4 value' },
+  { key: 'field_4', label: 'Level 5', placeholder: 'Optional level 5 value' },
+  { key: 'field_5', label: 'Level 6', placeholder: 'Optional level 6 value' },
+  { key: 'field_6', label: 'Level 7', placeholder: 'Optional level 7 value' },
+  { key: 'field_7', label: 'Level 8', placeholder: 'Optional level 8 value' },
+  { key: 'field_8', label: 'Level 9', placeholder: 'Optional level 9 value' },
+  { key: 'field_9', label: 'Level 10', placeholder: 'Optional level 10 value' },
+]
+
+const getCustomerAdminFormFromRow = (row: CustomerAreaOption): CustomerAdminForm => ({
+  Title: row.Title?.trim() || '',
+  field_1: readString(row.field_1),
+  field_2: readString(row.field_2),
+  field_3: readString(row.field_3),
+  field_4: readString(row.field_4),
+  field_5: readString(row.field_5),
+  field_6: readString(row.field_6),
+  field_7: readString(row.field_7),
+  field_8: readString(row.field_8),
+  field_9: readString(row.field_9),
+})
+
+const normalizeCustomerAdminForm = (value: CustomerAdminForm): CustomerAdminForm => ({
+  Title: value.Title.trim(),
+  field_1: value.field_1.trim(),
+  field_2: value.field_2.trim(),
+  field_3: value.field_3.trim(),
+  field_4: value.field_4.trim(),
+  field_5: value.field_5.trim(),
+  field_6: value.field_6.trim(),
+  field_7: value.field_7.trim(),
+  field_8: value.field_8.trim(),
+  field_9: value.field_9.trim(),
+})
+
+const isCustomerAdminFormValid = (value: CustomerAdminForm) =>
+  Boolean(value.Title.trim() && value.field_1.trim())
+
+const getCustomerAdminErrors = (
+  value: CustomerAdminForm,
+  existingRows: CustomerAreaOption[],
+  editingId?: number,
+): CustomerAdminErrors => {
+  const cleaned = normalizeCustomerAdminForm(value)
+  const errors: CustomerAdminErrors = {}
+  if (!cleaned.Title) errors.Title = 'Customer name is required.'
+  if (!cleaned.field_1) errors.field_1 = 'Location is required.'
+  if (cleaned.field_2 && cleaned.field_2.startsWith('/')) {
+    errors.field_2 = 'Sub-location path should not start with a slash.'
+  }
+  const isDuplicate = existingRows.some((row) => row.ID !== editingId && (
+    normalize(getCustomerName(row)) === normalize(cleaned.Title)
+    && normalize(getCustomerArea(row)) === normalize(cleaned.field_1)
+    && normalize(getCustomerSubLocationRaw(row)) === normalize(cleaned.field_2)
+  ))
+  if (isDuplicate) {
+    errors.Title = 'A customer with this name and location already exists.'
+    if (!cleaned.field_2) errors.field_1 = 'Change the location or sub-location to create a unique customer.'
+  }
+  return errors
+}
+
+const getCustomerAdminSummary = (row: CustomerAreaOption) => {
+  const parts = [
+    getCustomerArea(row),
+    getCustomerSubLocationRaw(row),
+    readString(row.field_3),
+    readString(row.field_4),
+    readString(row.field_5),
+    readString(row.field_6),
+    readString(row.field_7),
+    readString(row.field_8),
+    readString(row.field_9),
+  ].filter(Boolean)
+  return parts.join(' / ')
 }
 
 const pad = (value: number) => String(value).padStart(2, '0')
@@ -280,7 +398,6 @@ const useFilePreviewDataUrl = (file: File | null) => {
     let cancelled = false
 
     if (!file) {
-      setPreviewUrl('')
       return () => {
         cancelled = true
       }
@@ -299,7 +416,7 @@ const useFilePreviewDataUrl = (file: File | null) => {
     }
   }, [file])
 
-  return previewUrl
+  return file ? previewUrl : ''
 }
 
 const STEPS = [
@@ -552,6 +669,13 @@ function Sidebar({
           <div className="cora-sidebar-section-title">Reference</div>
           <button
             className={`cora-nav-item ${view === 'admin' ? 'active' : ''}`}
+            onClick={() => { onAdminNav('customers'); onClose() }}
+            disabled={!isAdmin}
+          >
+            {I.building} Customers
+          </button>
+          <button
+            className={`cora-nav-item ${view === 'admin' ? 'active' : ''}`}
             onClick={() => { onAdminNav('drivers'); onClose() }}
             disabled={!isAdmin}
           >
@@ -581,12 +705,27 @@ function Sidebar({
 
 /* ── Toast ── */
 function ToastNotif({ toast, onClose }: { toast: Toast; onClose: () => void }) {
-  useEffect(() => { const t = setTimeout(onClose, 4200); return () => clearTimeout(t) }, [onClose])
+  useEffect(() => {
+    const t = setTimeout(onClose, toast.durationMs ?? (toast.actionLabel ? 7000 : 4200))
+    return () => clearTimeout(t)
+  }, [onClose, toast.actionLabel, toast.durationMs])
   return (
     <div className="cora-toast-wrap">
       <div className={`cora-toast ${toast.type}`} role="alert">
-        <span>{toast.type === 'success' ? '✓' : '✕'}</span>
-        <span>{toast.text}</span>
+        <span className="cora-toast-icon">{toast.type === 'success' ? '✓' : '✕'}</span>
+        <span className="cora-toast-text">{toast.text}</span>
+        {toast.actionLabel && toast.onAction && (
+          <button
+            className="cora-toast-action"
+            type="button"
+            onClick={() => {
+              toast.onAction?.()
+              onClose()
+            }}
+          >
+            {toast.actionLabel}
+          </button>
+        )}
         <button className="cora-toast-close" onClick={onClose} aria-label="Dismiss">×</button>
       </div>
     </div>
@@ -732,62 +871,104 @@ function OrdersTable({ orders, loadState }: { orders: ServiceOrdersRead[]; loadS
 }
 
 function AdminReferencePage({
-  activeTab, onTabChange, drivers, vehicles, categories, busy, currentUserEmail,
-  onAddDriver, onAddVehicle, onAddWasteCategory,
-  onUpdateDriver, onUpdateVehicle, onUpdateWasteCategory,
-  onDeleteDriver, onDeleteVehicle, onDeleteWasteCategory,
+  activeTab, onTabChange, customerAreas, drivers, vehicles, categories, busy, currentUserEmail,
+  onAddCustomer, onAddDriver, onAddVehicle, onAddWasteCategory,
+  onUpdateCustomer, onUpdateDriver, onUpdateVehicle, onUpdateWasteCategory,
+  onDeleteCustomer, onDeleteDriver, onDeleteVehicle, onDeleteWasteCategory,
 }: {
   activeTab: AdminTab
   onTabChange: (tab: AdminTab) => void
+  customerAreas: CustomerAreaOption[]
   drivers: Drivers1Read[]
   vehicles: VehiclesRead[]
   categories: Waste_CategoriesRead[]
   busy: boolean
   currentUserEmail: string
+  onAddCustomer: (value: CustomerAdminForm) => Promise<void>
   onAddDriver: (name: string) => Promise<void>
   onAddVehicle: (vehicleNumber: string) => Promise<void>
   onAddWasteCategory: (category: string) => Promise<void>
+  onUpdateCustomer: (id: number, value: CustomerAdminForm) => Promise<void>
   onUpdateDriver: (id: number, name: string) => Promise<void>
   onUpdateVehicle: (id: number, vehicleNumber: string) => Promise<void>
   onUpdateWasteCategory: (id: number, category: string) => Promise<void>
+  onDeleteCustomer: (id: number, name: string) => Promise<void>
   onDeleteDriver: (id: number, name: string) => Promise<void>
   onDeleteVehicle: (id: number, vehicleNumber: string) => Promise<void>
   onDeleteWasteCategory: (id: number, category: string) => Promise<void>
 }) {
+  const [customerSearch, setCustomerSearch] = useState('')
   const [driverName, setDriverName] = useState('')
   const [vehicleNumber, setVehicleNumber] = useState('')
   const [wasteCategory, setWasteCategory] = useState('')
   const [saving, setSaving] = useState<AdminTab | null>(null)
   const [editing, setEditing] = useState<{ tab: AdminTab; id: number; value: string } | null>(null)
+  const [editingError, setEditingError] = useState('')
+  const [simpleErrors, setSimpleErrors] = useState<Partial<Record<'drivers' | 'vehicles' | 'waste', string>>>({})
+  const [customerModal, setCustomerModal] = useState<{
+    mode: 'create' | 'edit'
+    id?: number
+    value: CustomerAdminForm
+    errors: CustomerAdminErrors
+  } | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null)
   const [busyItem, setBusyItem] = useState<string | null>(null)
 
-  const submit = async (tab: AdminTab) => {
+  const validateSimpleValue = useCallback((tab: 'drivers' | 'vehicles' | 'waste', rawValue: string, editingId?: number) => {
+    const cleaned = rawValue.trim()
+    if (!cleaned) {
+      return tab === 'drivers'
+        ? 'Driver name is required.'
+        : tab === 'vehicles'
+          ? 'Vehicle number is required.'
+          : 'Waste category is required.'
+    }
+
+    if (tab === 'drivers' && drivers.some((driver) => driver.ID !== editingId && normalize(getDriverName(driver)) === normalize(cleaned))) {
+      return `"${cleaned}" already exists in drivers.`
+    }
+    if (tab === 'vehicles' && vehicles.some((vehicle) => vehicle.ID !== editingId && normalize(vehicle.Title || '') === normalize(cleaned))) {
+      return `"${cleaned}" already exists in vehicles.`
+    }
+    if (tab === 'waste' && categories.some((category) => category.ID !== editingId && normalize(category.Title || '') === normalize(cleaned))) {
+      return `"${cleaned}" already exists in waste categories.`
+    }
+    return ''
+  }, [categories, drivers, vehicles])
+
+  const submit = async (tab: Exclude<AdminTab, 'customers'>) => {
     const values = {
       drivers: driverName,
       vehicles: vehicleNumber,
       waste: wasteCategory,
     }
-    const value = values[tab].trim()
-    if (!value) return
+    const value = values[tab]
+    const error = validateSimpleValue(tab, value)
+    if (error) {
+      setSimpleErrors((current) => ({ ...current, [tab]: error }))
+      return
+    }
 
     setSaving(tab)
     try {
       if (tab === 'drivers') {
-        await onAddDriver(value)
+        await onAddDriver(value.trim())
         setDriverName('')
       } else if (tab === 'vehicles') {
-        await onAddVehicle(value)
+        await onAddVehicle(value.trim())
         setVehicleNumber('')
       } else {
-        await onAddWasteCategory(value)
+        await onAddWasteCategory(value.trim())
         setWasteCategory('')
       }
+      setSimpleErrors((current) => ({ ...current, [tab]: '' }))
     } finally {
       setSaving(null)
     }
   }
 
   const tabs: { key: AdminTab; label: string; count: number; icon: ReactNode }[] = [
+    { key: 'customers', label: 'Customers', count: customerAreas.length, icon: I.building },
     { key: 'drivers', label: 'Drivers', count: drivers.length, icon: I.user },
     { key: 'vehicles', label: 'Vehicles', count: vehicles.length, icon: I.truck },
     { key: 'waste', label: 'Waste Categories', count: categories.length, icon: I.recycle },
@@ -796,7 +977,9 @@ function AdminReferencePage({
     ? drivers.map((driver) => ({ id: driver.ID, value: getDriverName(driver) }))
     : activeTab === 'vehicles'
       ? vehicles.map((vehicle) => ({ id: vehicle.ID, value: vehicle.Title?.trim() || '' }))
-      : categories.map((category) => ({ id: category.ID, value: category.Title?.trim() || '' }))
+      : activeTab === 'waste'
+        ? categories.map((category) => ({ id: category.ID, value: category.Title?.trim() || '' }))
+        : []
 
   const activeConfig = {
     drivers: {
@@ -820,11 +1003,67 @@ function AdminReferencePage({
       value: wasteCategory,
       onChange: setWasteCategory,
     },
-  }[activeTab]
+  } as const
+  const activeSimpleConfig = activeTab === 'customers' ? null : activeConfig[activeTab]
+  const normalizedCustomerSearch = customerSearch.trim().toLowerCase()
+  const customerItems = customerAreas
+    .filter((item): item is CustomerAreaOption & { ID: number } => Boolean(item.ID && getCustomerName(item)))
+    .sort((a, b) => getCustomerName(a).localeCompare(getCustomerName(b)))
+  const filteredCustomers = customerItems.filter((item) => {
+    if (!normalizedCustomerSearch) return true
+    const haystack = `${getCustomerName(item)} ${getCustomerAdminSummary(item)}`.toLowerCase()
+    return haystack.includes(normalizedCustomerSearch)
+  })
+
+  const openCustomerModal = (mode: 'create' | 'edit', item?: CustomerAreaOption & { ID: number }) => {
+    setCustomerModal({
+      mode,
+      id: item?.ID,
+      value: item ? getCustomerAdminFormFromRow(item) : createEmptyCustomerAdminForm(),
+      errors: {},
+    })
+  }
+
+  const setCustomerModalField = (key: CustomerAdminFieldKey, nextValue: string) => {
+    setCustomerModal((current) => (
+      current
+        ? {
+          ...current,
+          value: { ...current.value, [key]: nextValue },
+          errors: { ...current.errors, [key]: '' },
+        }
+        : current
+    ))
+  }
+
+  const submitCustomerModal = async () => {
+    if (!customerModal) return
+    const errors = getCustomerAdminErrors(customerModal.value, customerAreas, customerModal.id)
+    if (Object.keys(errors).length > 0) {
+      setCustomerModal((current) => current ? { ...current, errors } : current)
+      return
+    }
+
+    setSaving('customers')
+    try {
+      if (customerModal.mode === 'create') {
+        await onAddCustomer(normalizeCustomerAdminForm(customerModal.value))
+      } else if (customerModal.id) {
+        await onUpdateCustomer(customerModal.id, normalizeCustomerAdminForm(customerModal.value))
+      }
+      setCustomerModal(null)
+    } finally {
+      setSaving(null)
+    }
+  }
 
   const updateItem = async (id: number, value: string) => {
     const cleaned = value.trim()
-    if (!cleaned) return
+    const error = validateSimpleValue(activeTab as 'drivers' | 'vehicles' | 'waste', cleaned, id)
+    if (error) {
+      setEditingError(error)
+      return
+    }
     const key = `update-${activeTab}-${id}`
     setBusyItem(key)
     try {
@@ -832,20 +1071,26 @@ function AdminReferencePage({
       else if (activeTab === 'vehicles') await onUpdateVehicle(id, cleaned)
       else await onUpdateWasteCategory(id, cleaned)
       setEditing(null)
+      setEditingError('')
     } finally {
       setBusyItem(null)
     }
   }
 
-  const deleteItem = async (id: number, value: string) => {
-    if (!window.confirm(`Delete "${value}"? This cannot be undone.`)) return
-    const key = `delete-${activeTab}-${id}`
+  const confirmDelete = async () => {
+    if (!deleteTarget) return
+    const key = `delete-${deleteTarget.tab}-${deleteTarget.id}`
     setBusyItem(key)
     try {
-      if (activeTab === 'drivers') await onDeleteDriver(id, value)
-      else if (activeTab === 'vehicles') await onDeleteVehicle(id, value)
-      else await onDeleteWasteCategory(id, value)
-      if (editing?.id === id && editing.tab === activeTab) setEditing(null)
+      if (deleteTarget.tab === 'customers') await onDeleteCustomer(deleteTarget.id, deleteTarget.name)
+      else if (deleteTarget.tab === 'drivers') await onDeleteDriver(deleteTarget.id, deleteTarget.name)
+      else if (deleteTarget.tab === 'vehicles') await onDeleteVehicle(deleteTarget.id, deleteTarget.name)
+      else await onDeleteWasteCategory(deleteTarget.id, deleteTarget.name)
+      if (editing?.id === deleteTarget.id && editing.tab === deleteTarget.tab) {
+        setEditing(null)
+        setEditingError('')
+      }
+      setDeleteTarget(null)
     } finally {
       setBusyItem(null)
     }
@@ -869,6 +1114,8 @@ function AdminReferencePage({
               className={`cora-admin-tab ${activeTab === tab.key ? 'active' : ''}`}
               onClick={() => {
                 setEditing(null)
+                setEditingError('')
+                setSimpleErrors({})
                 onTabChange(tab.key)
               }}
               disabled={busy || Boolean(saving) || Boolean(busyItem)}
@@ -878,61 +1125,159 @@ function AdminReferencePage({
           ))}
         </div>
 
-        <div className="cora-form-grid cora-admin-form">
-          <div className="cora-section-divider"><span>{activeConfig.title}</span></div>
-          <div className="cora-field">
-            <label className="cora-label" htmlFor={`admin-${activeTab}`}>{activeConfig.label}</label>
-            <input
-              id={`admin-${activeTab}`}
-              className="cora-input"
-              value={activeConfig.value}
-              onChange={(event) => activeConfig.onChange(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') {
-                  event.preventDefault()
-                  void submit(activeTab)
-                }
-              }}
-              placeholder={activeConfig.placeholder}
-              disabled={busy || Boolean(saving)}
-            />
+        {activeTab === 'customers' ? (
+          <>
+            <div className="cora-form-grid cora-admin-form cora-admin-customer-manage">
+              <div className="cora-section-divider"><span>Manage Customers</span></div>
+              <div className="cora-field span">
+                <p className="cora-field-hint">Use search to find customers quickly. Open the customer editor to add or update the hierarchy fields that drive the order form.</p>
+              </div>
+              <div className="cora-admin-toolbar">
+                <div className="cora-table-search-wrap">
+                  <svg className="cora-table-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
+                  </svg>
+                  <input
+                    className="cora-table-search"
+                    value={customerSearch}
+                    onChange={(event) => setCustomerSearch(event.target.value)}
+                    placeholder="Search customers or locations..."
+                    aria-label="Search customers"
+                    disabled={busy || Boolean(busyItem)}
+                  />
+                  {customerSearch && (
+                    <button className="cora-table-search-clear" type="button" onClick={() => setCustomerSearch('')} aria-label="Clear customer search">
+                      {I.x}
+                    </button>
+                  )}
+                </div>
+                <div className="cora-admin-toolbar-actions">
+                  <span className="cora-table-filter-badge">{filteredCustomers.length} of {customerItems.length} shown</span>
+                  <button
+                    type="button"
+                    className="cora-btn cora-btn-primary"
+                    onClick={() => openCustomerModal('create')}
+                    disabled={busy || Boolean(saving) || Boolean(busyItem)}
+                  >
+                    {I.plus} Add Customer
+                  </button>
+                </div>
+              </div>
+            </div>
+          </>
+        ) : (
+          <div className="cora-form-grid cora-admin-form">
+            <div className="cora-section-divider"><span>{activeSimpleConfig?.title}</span></div>
+            <div className="cora-field">
+              <label className="cora-label" htmlFor={`admin-${activeTab}`}>{activeSimpleConfig?.label}</label>
+              <input
+                id={`admin-${activeTab}`}
+                className={`cora-input ${simpleErrors[activeTab] ? 'invalid' : ''}`}
+                value={activeSimpleConfig?.value ?? ''}
+                onChange={(event) => {
+                  activeSimpleConfig?.onChange(event.target.value)
+                  setSimpleErrors((current) => ({ ...current, [activeTab]: '' }))
+                }}
+                onBlur={() => {
+                  const nextError = validateSimpleValue(activeTab, activeSimpleConfig?.value ?? '')
+                  setSimpleErrors((current) => ({ ...current, [activeTab]: nextError }))
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    event.preventDefault()
+                    void submit(activeTab)
+                  }
+                }}
+                placeholder={activeSimpleConfig?.placeholder}
+                disabled={busy || Boolean(saving)}
+              />
+              {simpleErrors[activeTab] && <p className="cora-field-error">{simpleErrors[activeTab]}</p>}
+            </div>
+            <div className="cora-field cora-admin-submit-field">
+              <label className="cora-label" aria-hidden="true">&nbsp;</label>
+              <button
+                type="button"
+                className="cora-btn cora-btn-primary"
+                onClick={() => void submit(activeTab)}
+                disabled={busy || Boolean(saving)}
+              >
+                {saving === activeTab ? <><span className="cora-spinner" /> Saving</> : <>{I.plus} Add</>}
+              </button>
+            </div>
           </div>
-          <div className="cora-field cora-admin-submit-field">
-            <label className="cora-label" aria-hidden="true">&nbsp;</label>
-            <button
-              type="button"
-              className="cora-btn cora-btn-primary"
-              onClick={() => void submit(activeTab)}
-              disabled={busy || Boolean(saving) || !activeConfig.value.trim()}
-            >
-              {saving === activeTab ? <><span className="cora-spinner" /> Saving</> : <>{I.plus} Add</>}
-            </button>
-          </div>
-        </div>
+        )}
 
         <div className="cora-admin-list">
           <div className="cora-section-divider"><span>Current {tabs.find((tab) => tab.key === activeTab)?.label}</span></div>
-          {activeItems.filter((item) => item.id && item.value).length === 0 ? (
+          {activeTab === 'customers' ? (
+            customerItems.length === 0 ? (
+              <div className="cora-table-empty">No customers have been added yet. Use the form above to add one.</div>
+            ) : filteredCustomers.length === 0 ? (
+              <div className="cora-table-empty">No customers match "{customerSearch.trim()}". Try a different name or location.</div>
+            ) : (
+              <div className="cora-admin-crud-list">
+                {filteredCustomers.map((item) => {
+                  const itemName = getCustomerName(item)
+                  return (
+                    <div className="cora-admin-crud-item cora-admin-customer-item" key={`customers-${item.ID}`}>
+                      <div className="cora-admin-customer-summary">
+                        <span className="cora-admin-crud-name">{itemName}</span>
+                        <span className="cora-admin-customer-meta">{getCustomerAdminSummary(item) || 'No location details'}</span>
+                      </div>
+                      <div className="cora-admin-crud-actions">
+                        <button
+                          type="button"
+                          className="cora-btn cora-btn-outline"
+                          onClick={() => openCustomerModal('edit', item)}
+                          disabled={Boolean(busyItem)}
+                        >
+                          Edit
+                        </button>
+                        <button
+                          type="button"
+                          className="cora-btn cora-btn-danger"
+                          onClick={() => setDeleteTarget({ tab: 'customers', id: item.ID, name: itemName })}
+                          disabled={Boolean(busyItem)}
+                        >
+                          {busyItem === `delete-customers-${item.ID}` ? <><span className="cora-spinner" /> Deleting</> : 'Delete'}
+                        </button>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            )
+          ) : activeItems.filter((item) => item.id && item.value).length === 0 ? (
             <div className="cora-table-empty">No {tabs.find((tab) => tab.key === activeTab)?.label.toLowerCase()} have been added yet. Use the form above to add one.</div>
           ) : (
             <div className="cora-admin-crud-list">
               {activeItems.filter((item): item is { id: number; value: string } => Boolean(item.id && item.value)).map((item) => (
                 <div className="cora-admin-crud-item" key={`${activeTab}-${item.id}`}>
                   {editing?.tab === activeTab && editing.id === item.id ? (
-                    <input
-                      className="cora-input cora-admin-edit-input"
-                      value={editing.value}
-                      onChange={(event) => setEditing({ ...editing, value: event.target.value })}
-                      onKeyDown={(event) => {
-                        if (event.key === 'Enter') {
-                          event.preventDefault()
-                          void updateItem(item.id, editing.value)
-                        }
-                        if (event.key === 'Escape') setEditing(null)
-                      }}
-                      disabled={Boolean(busyItem)}
-                      autoFocus
-                    />
+                    <div className="cora-admin-inline-edit">
+                      <input
+                        className={`cora-input cora-admin-edit-input ${editingError ? 'invalid' : ''}`}
+                        value={editing.value}
+                        onChange={(event) => {
+                          setEditing({ ...editing, value: event.target.value })
+                          setEditingError('')
+                        }}
+                        onBlur={() => setEditingError(validateSimpleValue(activeTab, editing.value, item.id))}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter') {
+                            event.preventDefault()
+                            void updateItem(item.id, editing.value)
+                          }
+                          if (event.key === 'Escape') {
+                            setEditing(null)
+                            setEditingError('')
+                          }
+                        }}
+                        disabled={Boolean(busyItem)}
+                        autoFocus
+                      />
+                      {editingError && <p className="cora-field-error">{editingError}</p>}
+                    </div>
                   ) : (
                     <span className="cora-admin-crud-name">{item.value}</span>
                   )}
@@ -943,11 +1288,19 @@ function AdminReferencePage({
                           type="button"
                           className="cora-btn cora-btn-primary"
                           onClick={() => void updateItem(item.id, editing.value)}
-                          disabled={Boolean(busyItem) || !editing.value.trim()}
+                          disabled={Boolean(busyItem)}
                         >
                           {busyItem === `update-${activeTab}-${item.id}` ? <><span className="cora-spinner" /> Saving</> : 'Save'}
                         </button>
-                        <button type="button" className="cora-btn cora-btn-outline" onClick={() => setEditing(null)} disabled={Boolean(busyItem)}>
+                        <button
+                          type="button"
+                          className="cora-btn cora-btn-outline"
+                          onClick={() => {
+                            setEditing(null)
+                            setEditingError('')
+                          }}
+                          disabled={Boolean(busyItem)}
+                        >
                           Cancel
                         </button>
                       </>
@@ -956,7 +1309,10 @@ function AdminReferencePage({
                         <button
                           type="button"
                           className="cora-btn cora-btn-outline"
-                          onClick={() => setEditing({ tab: activeTab, id: item.id, value: item.value })}
+                          onClick={() => {
+                            setEditing({ tab: activeTab, id: item.id, value: item.value })
+                            setEditingError('')
+                          }}
                           disabled={Boolean(busyItem)}
                         >
                           Edit
@@ -964,7 +1320,7 @@ function AdminReferencePage({
                         <button
                           type="button"
                           className="cora-btn cora-btn-danger"
-                          onClick={() => void deleteItem(item.id, item.value)}
+                          onClick={() => setDeleteTarget({ tab: activeTab, id: item.id, name: item.value })}
                           disabled={Boolean(busyItem)}
                         >
                           {busyItem === `delete-${activeTab}-${item.id}` ? <><span className="cora-spinner" /> Deleting</> : 'Delete'}
@@ -978,6 +1334,25 @@ function AdminReferencePage({
           )}
         </div>
       </div>
+      {customerModal && (
+        <CustomerEditorModal
+          mode={customerModal.mode}
+          value={customerModal.value}
+          errors={customerModal.errors}
+          busy={saving === 'customers'}
+          onChange={setCustomerModalField}
+          onCancel={() => { if (saving !== 'customers') setCustomerModal(null) }}
+          onSubmit={() => void submitCustomerModal()}
+        />
+      )}
+      {deleteTarget && (
+        <ConfirmDeleteModal
+          target={deleteTarget}
+          busy={busyItem === `delete-${deleteTarget.tab}-${deleteTarget.id}`}
+          onCancel={() => { if (!busyItem) setDeleteTarget(null) }}
+          onConfirm={() => void confirmDelete()}
+        />
+      )}
     </div>
   )
 }
@@ -1286,6 +1661,133 @@ function ConfirmResetModal({
           <button className="cora-btn cora-btn-outline" type="button" onClick={onCancel}>Cancel</button>
           <button className="cora-btn cora-btn-danger" type="button" onClick={onConfirm} autoFocus>
             Start Over
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function CustomerEditorModal({
+  mode, value, errors, busy, onChange, onCancel, onSubmit,
+}: {
+  mode: 'create' | 'edit'
+  value: CustomerAdminForm
+  errors: CustomerAdminErrors
+  busy: boolean
+  onChange: (key: CustomerAdminFieldKey, nextValue: string) => void
+  onCancel: () => void
+  onSubmit: () => void
+}) {
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !busy) onCancel()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [busy, onCancel])
+
+  return (
+    <div className="cora-modal-backdrop" role="presentation" onMouseDown={() => { if (!busy) onCancel() }}>
+      <div className="cora-modal cora-admin-customer-modal" role="dialog" aria-modal="true" aria-labelledby="customer-editor-title" onMouseDown={(event) => event.stopPropagation()}>
+        <div className="cora-modal-head">
+          <div>
+            <h2 id="customer-editor-title">{mode === 'create' ? 'Add Customer' : 'Edit Customer'}</h2>
+            <p>Manage the customer hierarchy used by the service order wizard. Customer name and location are required.</p>
+          </div>
+          <button className="cora-modal-close" type="button" onClick={onCancel} aria-label="Close customer editor" disabled={busy}>
+            {I.x}
+          </button>
+        </div>
+        <div className="cora-modal-body">
+          <div className="cora-form-grid cora-admin-customer-modal-grid">
+            <div className="cora-section-divider"><span>Identity</span></div>
+            {CUSTOMER_ADMIN_FIELDS.slice(0, 3).map((field) => (
+              <div className={`cora-field ${field.key === 'field_2' ? 'span' : ''}`} key={`customer-modal-${field.key}`}>
+                <label className="cora-label" htmlFor={`customer-modal-${field.key}`}>
+                  {field.label} {field.required ? <span className="req">*</span> : null}
+                </label>
+                <input
+                  id={`customer-modal-${field.key}`}
+                  className={`cora-input ${errors[field.key] ? 'invalid' : ''}`}
+                  value={value[field.key]}
+                  onChange={(event) => onChange(field.key, event.target.value)}
+                  placeholder={field.placeholder}
+                  disabled={busy}
+                  autoFocus={field.key === 'Title'}
+                />
+                {field.key === 'field_2' && <p className="cora-field-hint">Use `/` to separate deeper location steps when needed, for example `Tower A / Level 2`.</p>}
+                {errors[field.key] && <p className="cora-field-error">{errors[field.key]}</p>}
+              </div>
+            ))}
+            <div className="cora-section-divider"><span>Optional Hierarchy</span></div>
+            {CUSTOMER_ADMIN_FIELDS.slice(3).map((field) => (
+              <div className="cora-field" key={`customer-optional-${field.key}`}>
+                <label className="cora-label" htmlFor={`customer-modal-${field.key}`}>{field.label}</label>
+                <input
+                  id={`customer-modal-${field.key}`}
+                  className={`cora-input ${errors[field.key] ? 'invalid' : ''}`}
+                  value={value[field.key]}
+                  onChange={(event) => onChange(field.key, event.target.value)}
+                  placeholder={field.placeholder}
+                  disabled={busy}
+                />
+                {errors[field.key] && <p className="cora-field-error">{errors[field.key]}</p>}
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className="cora-modal-foot">
+          <button className="cora-btn cora-btn-outline" type="button" onClick={onCancel} disabled={busy}>Cancel</button>
+          <button className="cora-btn cora-btn-primary" type="button" onClick={onSubmit} disabled={busy}>
+            {busy ? <><span className="cora-spinner" /> Saving</> : mode === 'create' ? 'Save Customer' : 'Update Customer'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function ConfirmDeleteModal({
+  target, busy, onCancel, onConfirm,
+}: {
+  target: DeleteTarget
+  busy: boolean
+  onCancel: () => void
+  onConfirm: () => void
+}) {
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !busy) onCancel()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [busy, onCancel])
+
+  const targetLabel = target.tab === 'waste'
+    ? 'waste category'
+    : target.tab === 'vehicles'
+      ? 'vehicle'
+      : target.tab === 'drivers'
+        ? 'driver'
+        : 'customer'
+
+  return (
+    <div className="cora-modal-backdrop" role="presentation" onMouseDown={() => { if (!busy) onCancel() }}>
+      <div className="cora-modal" role="dialog" aria-modal="true" aria-labelledby="confirm-delete-title" onMouseDown={(event) => event.stopPropagation()} style={{ width: 'min(420px, 100%)' }}>
+        <div className="cora-modal-head">
+          <div>
+            <h2 id="confirm-delete-title" style={{ color: 'var(--error)' }}>Delete {targetLabel}?</h2>
+            <p>Delete "{target.name}" from the admin reference data. You can undo this shortly after deletion.</p>
+          </div>
+          <button className="cora-modal-close" type="button" onClick={onCancel} aria-label="Cancel delete" disabled={busy}>
+            {I.x}
+          </button>
+        </div>
+        <div className="cora-modal-foot">
+          <button className="cora-btn cora-btn-outline" type="button" onClick={onCancel} disabled={busy}>Cancel</button>
+          <button className="cora-btn cora-btn-danger" type="button" onClick={onConfirm} disabled={busy}>
+            {busy ? <><span className="cora-spinner" /> Deleting</> : `Delete ${targetLabel}`}
           </button>
         </div>
       </div>
@@ -2125,12 +2627,12 @@ function StepReview({
       <div className="cora-section-divider"><span>Review Your Order</span></div>
       <div className="cora-field span">
         <div className="cora-review-table">
-          <table>
+          <table className="cora-review-table-summary">
             <tbody>
               {rows.map(([k, v]) => (
                 <tr key={k}>
-                  <td style={{ fontWeight: 600, color: 'var(--tx-secondary)', width: 160 }}>{k}</td>
-                  <td>{v}</td>
+                  <td className="cora-review-cell-label">{k}</td>
+                  <td className="cora-review-cell-value">{v}</td>
                 </tr>
               ))}
             </tbody>
@@ -2142,7 +2644,7 @@ function StepReview({
           <div className="cora-section-divider"><span>Waste Summary</span></div>
           <div className="cora-field span">
             <div className="cora-review-table">
-              <table>
+              <table className="cora-review-table-waste">
                 <thead>
                   <tr>
                     <th>Waste Category</th>
@@ -2574,6 +3076,54 @@ function App() {
     setToast({ type: 'error', text: 'There are no editable fields to clear on the review page.' })
   }, [form.WasteItems, step, submitted, submitting])
 
+  const persistReferenceCache = useCallback(async (next: Partial<CachedReferenceData>) => {
+    const record: CachedReferenceData = {
+      id: 'main',
+      fetchedAt: new Date().toISOString(),
+      customerAreas,
+      drivers,
+      vehicles,
+      categories,
+      ...next,
+    }
+    setCacheFetchedAt(record.fetchedAt)
+    setUsingCachedReferenceData(false)
+    await writeCachedReferenceData(record)
+  }, [categories, customerAreas, drivers, vehicles])
+
+  const showUndoToast = useCallback((text: string, onAction: () => void) => {
+    setToast({
+      type: 'success',
+      text,
+      actionLabel: 'Undo',
+      onAction,
+      durationMs: 7000,
+    })
+  }, [])
+
+  const addCustomer = useCallback(async (value: CustomerAdminForm) => {
+    const cleaned = normalizeCustomerAdminForm(value)
+    if (!isCustomerAdminFormValid(cleaned)) return
+    if (customerAreas.some((item) => (
+      normalize(getCustomerName(item)) === normalize(cleaned.Title)
+      && normalize(getCustomerArea(item)) === normalize(cleaned.field_1)
+      && normalize(getCustomerSubLocationRaw(item)) === normalize(cleaned.field_2)
+    ))) {
+      setToast({ type: 'error', text: `Customer "${cleaned.Title}" already exists for that location.` })
+      return
+    }
+    try {
+      const result = await Customer_area_data_clean_finalService.create(cleaned as Omit<Customer_area_data_clean_finalWrite, 'ID'>)
+      if (!result.data?.ID) throw new Error('Could not add the customer.')
+      const nextCustomers = [...customerAreas, result.data as CustomerAreaOption]
+      setCustomerAreas(nextCustomers)
+      await persistReferenceCache({ customerAreas: nextCustomers })
+      setToast({ type: 'success', text: `Customer "${cleaned.Title}" added.` })
+    } catch (error) {
+      setToast({ type: 'error', text: error instanceof Error ? error.message : 'Could not add the customer.' })
+    }
+  }, [customerAreas, persistReferenceCache])
+
   const addDriver = useCallback(async (name: string) => {
     const cleaned = name.trim()
     if (!cleaned) return
@@ -2584,12 +3134,14 @@ function App() {
     try {
       const result = await Drivers1Service.create({ Title: cleaned })
       if (!result.data?.ID) throw new Error('Could not add the driver.')
-      setDrivers((current) => [...current, result.data as Drivers1Read])
+      const nextDrivers = [...drivers, result.data as Drivers1Read]
+      setDrivers(nextDrivers)
+      await persistReferenceCache({ drivers: nextDrivers })
       setToast({ type: 'success', text: `Driver "${cleaned}" added.` })
     } catch (error) {
       setToast({ type: 'error', text: error instanceof Error ? error.message : 'Could not add the driver.' })
     }
-  }, [driverOptions])
+  }, [driverOptions, drivers, persistReferenceCache])
 
   const addVehicle = useCallback(async (vehicleNumber: string) => {
     const cleaned = vehicleNumber.trim()
@@ -2601,12 +3153,14 @@ function App() {
     try {
       const result = await VehiclesService.create({ Title: cleaned } as Omit<VehiclesWrite, 'ID'>)
       if (!result.data?.ID) throw new Error('Could not add the vehicle.')
-      setVehicles((current) => [...current, result.data as VehiclesRead])
+      const nextVehicles = [...vehicles, result.data as VehiclesRead]
+      setVehicles(nextVehicles)
+      await persistReferenceCache({ vehicles: nextVehicles })
       setToast({ type: 'success', text: `Vehicle "${cleaned}" added.` })
     } catch (error) {
       setToast({ type: 'error', text: error instanceof Error ? error.message : 'Could not add the vehicle.' })
     }
-  }, [vehicles])
+  }, [persistReferenceCache, vehicles])
 
   const addWasteCategory = useCallback(async (category: string) => {
     const cleaned = category.trim()
@@ -2618,12 +3172,14 @@ function App() {
     try {
       const result = await Waste_CategoriesService.create({ Title: cleaned } as Omit<Waste_CategoriesWrite, 'ID'>)
       if (!result.data?.ID) throw new Error('Could not add the waste category.')
-      setCategories((current) => [...current, result.data as Waste_CategoriesRead])
+      const nextCategories = [...categories, result.data as Waste_CategoriesRead]
+      setCategories(nextCategories)
+      await persistReferenceCache({ categories: nextCategories })
       setToast({ type: 'success', text: `Waste category "${cleaned}" added.` })
     } catch (error) {
       setToast({ type: 'error', text: error instanceof Error ? error.message : 'Could not add the waste category.' })
     }
-  }, [categories])
+  }, [categories, persistReferenceCache])
 
   const updateDriver = useCallback(async (id: number, name: string) => {
     const cleaned = name.trim()
@@ -2634,14 +3190,16 @@ function App() {
     }
     try {
       const result = await Drivers1Service.update(String(id), { Title: cleaned })
-      setDrivers((current) => current.map((driver) => (
+      const nextDrivers = drivers.map((driver) => (
         driver.ID === id ? (result.data ?? { ...driver, Title: cleaned }) as Drivers1Read : driver
-      )))
+      ))
+      setDrivers(nextDrivers)
+      await persistReferenceCache({ drivers: nextDrivers })
       setToast({ type: 'success', text: `Driver updated to "${cleaned}".` })
     } catch (error) {
       setToast({ type: 'error', text: error instanceof Error ? error.message : 'Could not update the driver.' })
     }
-  }, [drivers])
+  }, [drivers, persistReferenceCache])
 
   const updateVehicle = useCallback(async (id: number, vehicleNumber: string) => {
     const cleaned = vehicleNumber.trim()
@@ -2652,14 +3210,16 @@ function App() {
     }
     try {
       const result = await VehiclesService.update(String(id), { Title: cleaned })
-      setVehicles((current) => current.map((vehicle) => (
+      const nextVehicles = vehicles.map((vehicle) => (
         vehicle.ID === id ? (result.data ?? { ...vehicle, Title: cleaned }) as VehiclesRead : vehicle
-      )))
+      ))
+      setVehicles(nextVehicles)
+      await persistReferenceCache({ vehicles: nextVehicles })
       setToast({ type: 'success', text: `Vehicle updated to "${cleaned}".` })
     } catch (error) {
       setToast({ type: 'error', text: error instanceof Error ? error.message : 'Could not update the vehicle.' })
     }
-  }, [vehicles])
+  }, [persistReferenceCache, vehicles])
 
   const updateWasteCategory = useCallback(async (id: number, category: string) => {
     const cleaned = category.trim()
@@ -2670,44 +3230,149 @@ function App() {
     }
     try {
       const result = await Waste_CategoriesService.update(String(id), { Title: cleaned })
-      setCategories((current) => current.map((item) => (
+      const nextCategories = categories.map((item) => (
         item.ID === id ? (result.data ?? { ...item, Title: cleaned }) as Waste_CategoriesRead : item
-      )))
+      ))
+      setCategories(nextCategories)
+      await persistReferenceCache({ categories: nextCategories })
       setToast({ type: 'success', text: `Waste category updated to "${cleaned}".` })
     } catch (error) {
       setToast({ type: 'error', text: error instanceof Error ? error.message : 'Could not update the waste category.' })
     }
-  }, [categories])
+  }, [categories, persistReferenceCache])
+
+  const updateCustomer = useCallback(async (id: number, value: CustomerAdminForm) => {
+    const cleaned = normalizeCustomerAdminForm(value)
+    if (!isCustomerAdminFormValid(cleaned)) return
+    if (customerAreas.some((item) => item.ID !== id && (
+      normalize(getCustomerName(item)) === normalize(cleaned.Title)
+      && normalize(getCustomerArea(item)) === normalize(cleaned.field_1)
+      && normalize(getCustomerSubLocationRaw(item)) === normalize(cleaned.field_2)
+    ))) {
+      setToast({ type: 'error', text: `Customer "${cleaned.Title}" already exists for that location.` })
+      return
+    }
+    try {
+      const result = await Customer_area_data_clean_finalService.update(
+        String(id),
+        cleaned as Partial<Omit<Customer_area_data_clean_finalWrite, 'ID'>>,
+      )
+      const nextCustomers = customerAreas.map((item) => (
+        item.ID === id ? (result.data ?? { ...item, ...cleaned }) as CustomerAreaOption : item
+      ))
+      setCustomerAreas(nextCustomers)
+      await persistReferenceCache({ customerAreas: nextCustomers })
+      setToast({ type: 'success', text: `Customer "${cleaned.Title}" updated.` })
+    } catch (error) {
+      setToast({ type: 'error', text: error instanceof Error ? error.message : 'Could not update the customer.' })
+    }
+  }, [customerAreas, persistReferenceCache])
 
   const deleteDriver = useCallback(async (id: number, name: string) => {
+    const deletedDriver = drivers.find((driver) => driver.ID === id)
     try {
       await Drivers1Service.delete(String(id))
-      setDrivers((current) => current.filter((driver) => driver.ID !== id))
-      setToast({ type: 'success', text: `Driver "${name}" deleted.` })
+      const nextDrivers = drivers.filter((driver) => driver.ID !== id)
+      setDrivers(nextDrivers)
+      await persistReferenceCache({ drivers: nextDrivers })
+      showUndoToast(`Driver "${name}" deleted.`, () => {
+        if (!deletedDriver) return
+        void (async () => {
+          try {
+            const restored = await Drivers1Service.create({ Title: getDriverName(deletedDriver) || name })
+            const restoredDrivers = [...nextDrivers, restored.data as Drivers1Read]
+            setDrivers(restoredDrivers)
+            await persistReferenceCache({ drivers: restoredDrivers })
+            setToast({ type: 'success', text: `Driver "${name}" restored.` })
+          } catch (error) {
+            setToast({ type: 'error', text: error instanceof Error ? error.message : 'Could not restore the driver.' })
+          }
+        })()
+      })
     } catch (error) {
       setToast({ type: 'error', text: error instanceof Error ? error.message : 'Could not delete the driver.' })
     }
-  }, [])
+  }, [drivers, persistReferenceCache, showUndoToast])
 
   const deleteVehicle = useCallback(async (id: number, vehicleNumber: string) => {
+    const deletedVehicle = vehicles.find((vehicle) => vehicle.ID === id)
     try {
       await VehiclesService.delete(String(id))
-      setVehicles((current) => current.filter((vehicle) => vehicle.ID !== id))
-      setToast({ type: 'success', text: `Vehicle "${vehicleNumber}" deleted.` })
+      const nextVehicles = vehicles.filter((vehicle) => vehicle.ID !== id)
+      setVehicles(nextVehicles)
+      await persistReferenceCache({ vehicles: nextVehicles })
+      showUndoToast(`Vehicle "${vehicleNumber}" deleted.`, () => {
+        if (!deletedVehicle) return
+        void (async () => {
+          try {
+            const restored = await VehiclesService.create({ Title: deletedVehicle.Title?.trim() || vehicleNumber } as Omit<VehiclesWrite, 'ID'>)
+            const restoredVehicles = [...nextVehicles, restored.data as VehiclesRead]
+            setVehicles(restoredVehicles)
+            await persistReferenceCache({ vehicles: restoredVehicles })
+            setToast({ type: 'success', text: `Vehicle "${vehicleNumber}" restored.` })
+          } catch (error) {
+            setToast({ type: 'error', text: error instanceof Error ? error.message : 'Could not restore the vehicle.' })
+          }
+        })()
+      })
     } catch (error) {
       setToast({ type: 'error', text: error instanceof Error ? error.message : 'Could not delete the vehicle.' })
     }
-  }, [])
+  }, [persistReferenceCache, showUndoToast, vehicles])
 
   const deleteWasteCategory = useCallback(async (id: number, category: string) => {
+    const deletedCategory = categories.find((item) => item.ID === id)
     try {
       await Waste_CategoriesService.delete(String(id))
-      setCategories((current) => current.filter((item) => item.ID !== id))
-      setToast({ type: 'success', text: `Waste category "${category}" deleted.` })
+      const nextCategories = categories.filter((item) => item.ID !== id)
+      setCategories(nextCategories)
+      await persistReferenceCache({ categories: nextCategories })
+      showUndoToast(`Waste category "${category}" deleted.`, () => {
+        if (!deletedCategory) return
+        void (async () => {
+          try {
+            const restored = await Waste_CategoriesService.create({ Title: deletedCategory.Title?.trim() || category } as Omit<Waste_CategoriesWrite, 'ID'>)
+            const restoredCategories = [...nextCategories, restored.data as Waste_CategoriesRead]
+            setCategories(restoredCategories)
+            await persistReferenceCache({ categories: restoredCategories })
+            setToast({ type: 'success', text: `Waste category "${category}" restored.` })
+          } catch (error) {
+            setToast({ type: 'error', text: error instanceof Error ? error.message : 'Could not restore the waste category.' })
+          }
+        })()
+      })
     } catch (error) {
       setToast({ type: 'error', text: error instanceof Error ? error.message : 'Could not delete the waste category.' })
     }
-  }, [])
+  }, [categories, persistReferenceCache, showUndoToast])
+
+  const deleteCustomer = useCallback(async (id: number, name: string) => {
+    const deletedCustomer = customerAreas.find((item) => item.ID === id)
+    try {
+      await Customer_area_data_clean_finalService.delete(String(id))
+      const nextCustomers = customerAreas.filter((item) => item.ID !== id)
+      setCustomerAreas(nextCustomers)
+      await persistReferenceCache({ customerAreas: nextCustomers })
+      showUndoToast(`Customer "${name}" deleted.`, () => {
+        if (!deletedCustomer) return
+        void (async () => {
+          try {
+            const restored = await Customer_area_data_clean_finalService.create(
+              normalizeCustomerAdminForm(getCustomerAdminFormFromRow(deletedCustomer)) as Omit<Customer_area_data_clean_finalWrite, 'ID'>,
+            )
+            const restoredCustomers = [...nextCustomers, restored.data as CustomerAreaOption]
+            setCustomerAreas(restoredCustomers)
+            await persistReferenceCache({ customerAreas: restoredCustomers })
+            setToast({ type: 'success', text: `Customer "${name}" restored.` })
+          } catch (error) {
+            setToast({ type: 'error', text: error instanceof Error ? error.message : 'Could not restore the customer.' })
+          }
+        })()
+      })
+    } catch (error) {
+      setToast({ type: 'error', text: error instanceof Error ? error.message : 'Could not delete the customer.' })
+    }
+  }, [customerAreas, persistReferenceCache, showUndoToast])
 
   const saveAdhocCustomer = useCallback((values: Pick<Form, 'CustomerName' | 'CustomerLocation' | 'CustomerTenant'>) => {
     setForm((current) => ({
@@ -2934,17 +3599,21 @@ function App() {
             <AdminReferencePage
               activeTab={adminTab}
               onTabChange={setAdminTab}
+              customerAreas={customerAreas}
               drivers={drivers}
               vehicles={vehicles}
               categories={categories}
               busy={loadState !== 'loaded'}
               currentUserEmail={currentUserEmail}
+              onAddCustomer={addCustomer}
               onAddDriver={addDriver}
               onAddVehicle={addVehicle}
               onAddWasteCategory={addWasteCategory}
+              onUpdateCustomer={updateCustomer}
               onUpdateDriver={updateDriver}
               onUpdateVehicle={updateVehicle}
               onUpdateWasteCategory={updateWasteCategory}
+              onDeleteCustomer={deleteCustomer}
               onDeleteDriver={deleteDriver}
               onDeleteVehicle={deleteVehicle}
               onDeleteWasteCategory={deleteWasteCategory}
