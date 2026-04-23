@@ -25,6 +25,8 @@ const escapeODataString = (value: string) => value.replace(/'/g, "''")
 
 const blobToBase64 = async (file: StoredMediaFile | null | undefined) => {
   if (!file) return undefined
+  if (file.dataUrl) return file.dataUrl.split(',')[1] ?? ''
+  if (!file.blob) return undefined
   const buffer = await file.blob.arrayBuffer()
   let binary = ''
   const bytes = new Uint8Array(buffer)

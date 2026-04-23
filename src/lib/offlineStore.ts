@@ -43,7 +43,8 @@ export interface Form {
 }
 
 export interface StoredMediaFile {
-  blob: Blob
+  blob?: Blob
+  dataUrl?: string
   name: string
   type: string
   lastModified: number
@@ -163,21 +164,42 @@ const wrapRequest = <T>(request: IDBRequest<T>) =>
     request.onerror = () => reject(request.error ?? new Error('IndexedDB request failed.'))
   })
 
-export const toStoredMediaFile = (file: Blob | File | null | undefined, fallbackName = 'image.jpg'): StoredMediaFile | null => {
+const blobToDataUrl = (file: Blob | File) =>
+  new Promise<string>((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => {
+      if (typeof reader.result === 'string') {
+        resolve(reader.result)
+        return
+      }
+      reject(new Error('Could not prepare media for offline storage.'))
+    }
+    reader.onerror = () => reject(reader.error ?? new Error('Could not prepare media for offline storage.'))
+    reader.readAsDataURL(file)
+  })
+
+const dataUrlToBlob = async (dataUrl: string) => {
+  const response = await fetch(dataUrl)
+  return response.blob()
+}
+
+export const toStoredMediaFile = async (file: Blob | File | null | undefined, fallbackName = 'image.jpg'): Promise<StoredMediaFile | null> => {
   if (!file) return null
   const typedFile = file as File
   return {
-    blob: file,
+    dataUrl: await blobToDataUrl(file),
     name: typedFile.name || fallbackName,
     type: file.type || 'application/octet-stream',
     lastModified: typeof typedFile.lastModified === 'number' ? typedFile.lastModified : Date.now(),
   }
 }
 
-export const fromStoredMediaFile = (stored: StoredMediaFile | null | undefined) => {
+export const fromStoredMediaFile = async (stored: StoredMediaFile | null | undefined) => {
   if (!stored) return null
-  return new File([stored.blob], stored.name, {
-    type: stored.type || stored.blob.type || 'application/octet-stream',
+  const blob = stored.dataUrl ? await dataUrlToBlob(stored.dataUrl) : stored.blob
+  if (!blob) return null
+  return new File([blob], stored.name, {
+    type: stored.type || blob.type || 'application/octet-stream',
     lastModified: stored.lastModified || Date.now(),
   })
 }
@@ -246,4 +268,3 @@ const PERSISTED_STORE_NAMES = {
   queue: QUEUE_STORE,
   cache: CACHE_STORE,
 } as const
-

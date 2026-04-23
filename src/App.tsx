@@ -5,7 +5,7 @@
    ═══════════════════════════════════════════════════════ */
 
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
-import type { ChangeEvent, DragEvent, PointerEvent, ReactNode } from 'react'
+import type { ChangeEvent, DragEvent, PointerEvent as ReactPointerEvent, ReactNode } from 'react'
 import { getContext } from '@microsoft/power-apps/app'
 import type { Drivers1Read } from './generated/models/Drivers1Model'
 import type { Customer_area_data_clean_finalRead, Customer_area_data_clean_finalWrite } from './generated/models/Customer_area_data_clean_finalModel'
@@ -336,13 +336,13 @@ const createBlankForm = (): Form => ({
 }
 )
 
-const buildPersistedForm = (form: Form): PersistedForm => ({
+const buildPersistedForm = async (form: Form): Promise<PersistedForm> => ({
   ...form,
-  WasteItems: form.WasteItems.map((line): PersistedWasteLine => ({
+  WasteItems: await Promise.all(form.WasteItems.map(async (line): Promise<PersistedWasteLine> => ({
     id: line.id,
     WasteCategory: line.WasteCategory,
     Tonnage: line.Tonnage,
-    scalePhoto: toStoredMediaFile(line.scalePhotoFile, `${line.id}-scale-photo.jpg`),
+    scalePhoto: await toStoredMediaFile(line.scalePhotoFile, `${line.id}-scale-photo.jpg`),
     scaleOcrCropPreviewDataUrl: line.scaleOcrCropPreviewUrl,
     scaleOcrCrop: line.scaleOcrCrop,
     scaleOcrStatus: line.scaleOcrStatus,
@@ -352,13 +352,13 @@ const buildPersistedForm = (form: Form): PersistedForm => ({
     scaleOcrReasons: line.scaleOcrReasons,
     scaleOcrError: line.scaleOcrError,
     scaleOcrRequestId: line.scaleOcrRequestId,
-  })),
+  }))),
 })
 
 const restorePersistedForm = async (persisted: PersistedForm): Promise<Form> => ({
   ...persisted,
   WasteItems: await Promise.all(persisted.WasteItems.map(async (line): Promise<WasteLine> => {
-    const scalePhotoFile = fromStoredMediaFile(line.scalePhoto)
+    const scalePhotoFile = await fromStoredMediaFile(line.scalePhoto)
     return {
       id: line.id,
       WasteCategory: line.WasteCategory,
@@ -428,6 +428,69 @@ const STEPS = [
 ] as const
 
 const LAST_STEP = STEPS.length - 1
+const STEP_GUIDANCE = [
+  {
+    title: 'Confirm the auto-created order details.',
+    body: 'Check the generated title and set the collection date before moving on.',
+  },
+  {
+    title: 'Choose the exact customer path.',
+    body: 'Pick the customer, location, and any available sub-levels, or open the ad-hoc customer setup for one-off jobs.',
+  },
+  {
+    title: 'Assign resources and record waste.',
+    body: 'Add the driver, vehicle, and every waste line with category, tonnage, and optional scale proof.',
+  },
+  {
+    title: 'Capture proof from the collection.',
+    body: 'The customer signature is required. Before and after photos help validate the job but remain optional.',
+  },
+  {
+    title: 'Review the full service order before sending.',
+    body: 'Use this page to confirm the order details, waste summary, and proof attachments before submission.',
+  },
+] as const
+
+const parseIsoDate = (value: string) => {
+  const [year, month, day] = value.split('-').map(Number)
+  if (!year || !month || !day) return null
+  const parsed = new Date(year, month - 1, day)
+  if (
+    Number.isNaN(parsed.getTime())
+    || parsed.getFullYear() !== year
+    || parsed.getMonth() !== month - 1
+    || parsed.getDate() !== day
+  ) {
+    return null
+  }
+  return parsed
+}
+
+const formatIsoDate = (date: Date) => {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+const formatDateDisplay = (value: string) => {
+  const parsed = parseIsoDate(value)
+  if (!parsed) return ''
+  return parsed.toLocaleDateString('en-GB', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+  })
+}
+
+const isSameCalendarDay = (left: Date | null, right: Date | null) =>
+  Boolean(
+    left
+    && right
+    && left.getFullYear() === right.getFullYear()
+    && left.getMonth() === right.getMonth()
+    && left.getDate() === right.getDate(),
+  )
 
 /* ═══════════════════════════════════════════════════════
    Sub-components
@@ -441,45 +504,188 @@ function CustomSelect({
 }) {
   const [isOpen, setIsOpen] = useState(false)
   const [searchTerm, setSearchTerm] = useState('')
+  const [activeIndex, setActiveIndex] = useState(-1)
   const containerRef = useRef<HTMLDivElement>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
+  const optionRefs = useRef<(HTMLButtonElement | null)[]>([])
+  const listboxId = `${id}-listbox`
 
   useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
+    const handleClickOutside = (event: globalThis.PointerEvent) => {
       if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
         setIsOpen(false)
         setSearchTerm('')
+        setActiveIndex(-1)
       }
     }
-    document.addEventListener('mousedown', handleClickOutside)
-    return () => document.removeEventListener('mousedown', handleClickOutside)
+    document.addEventListener('pointerdown', handleClickOutside)
+    return () => document.removeEventListener('pointerdown', handleClickOutside)
   }, [])
-
-  useEffect(() => {
-    if (isOpen && searchable) window.setTimeout(() => searchInputRef.current?.focus(), 0)
-  }, [isOpen, searchable])
 
   const selectedOption = options.find(o => o.value === value)
   const normalizedSearch = searchTerm.trim().toLowerCase()
   const filteredOptions = normalizedSearch
     ? options.filter((option) => option.label.toLowerCase().includes(normalizedSearch))
     : options
+  const selectedIndex = filteredOptions.findIndex((option) => option.value === value)
+
+  useEffect(() => {
+    if (!isOpen) return
+    setActiveIndex((current) => {
+      if (filteredOptions.length === 0) return -1
+      if (current >= 0 && current < filteredOptions.length) return current
+      return selectedIndex >= 0 ? selectedIndex : 0
+    })
+  }, [filteredOptions, isOpen, selectedIndex])
+
+  useEffect(() => {
+    if (!isOpen) return
+    window.setTimeout(() => {
+      if (searchable) {
+        searchInputRef.current?.focus()
+        return
+      }
+      if (activeIndex >= 0) optionRefs.current[activeIndex]?.focus()
+    }, 0)
+  }, [activeIndex, isOpen, searchable])
+
+  useEffect(() => {
+    if (!isOpen || activeIndex < 0) return
+    optionRefs.current[activeIndex]?.scrollIntoView({ block: 'nearest' })
+  }, [activeIndex, isOpen])
+
+  const closeMenu = useCallback((returnFocus = false) => {
+    setIsOpen(false)
+    setSearchTerm('')
+    setActiveIndex(-1)
+    if (returnFocus) window.setTimeout(() => triggerRef.current?.focus(), 0)
+  }, [])
+
+  const selectOption = useCallback((nextValue: string) => {
+    onChange(nextValue)
+    closeMenu(true)
+  }, [closeMenu, onChange])
+
+  const openMenu = useCallback(() => {
+    if (disabled) return
+    setIsOpen(true)
+  }, [disabled])
+
+  const moveActiveIndex = useCallback((direction: 1 | -1) => {
+    if (!filteredOptions.length) return
+    setActiveIndex((current) => {
+      if (current < 0) return direction === 1 ? 0 : filteredOptions.length - 1
+      const nextIndex = current + direction
+      if (nextIndex < 0) return filteredOptions.length - 1
+      if (nextIndex >= filteredOptions.length) return 0
+      return nextIndex
+    })
+  }, [filteredOptions.length])
+
+  const handleTriggerKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>) => {
+    if (disabled) return
+    if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      if (!isOpen) {
+        openMenu()
+        return
+      }
+      moveActiveIndex(1)
+      return
+    }
+    if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      if (!isOpen) {
+        openMenu()
+        return
+      }
+      moveActiveIndex(-1)
+      return
+    }
+    if (event.key === 'Home' && isOpen) {
+      event.preventDefault()
+      setActiveIndex(filteredOptions.length > 0 ? 0 : -1)
+      return
+    }
+    if (event.key === 'End' && isOpen) {
+      event.preventDefault()
+      setActiveIndex(filteredOptions.length > 0 ? filteredOptions.length - 1 : -1)
+      return
+    }
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault()
+      if (!isOpen) {
+        openMenu()
+        return
+      }
+      if (activeIndex >= 0 && filteredOptions[activeIndex]) {
+        selectOption(filteredOptions[activeIndex].value)
+      }
+      return
+    }
+    if (event.key === 'Escape' && isOpen) {
+      event.preventDefault()
+      closeMenu(true)
+    }
+  }
+
+  const handleSearchKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      moveActiveIndex(1)
+      return
+    }
+    if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      moveActiveIndex(-1)
+      return
+    }
+    if (event.key === 'Home') {
+      event.preventDefault()
+      setActiveIndex(filteredOptions.length > 0 ? 0 : -1)
+      return
+    }
+    if (event.key === 'End') {
+      event.preventDefault()
+      setActiveIndex(filteredOptions.length > 0 ? filteredOptions.length - 1 : -1)
+      return
+    }
+    if (event.key === 'Enter' && activeIndex >= 0 && filteredOptions[activeIndex]) {
+      event.preventDefault()
+      selectOption(filteredOptions[activeIndex].value)
+      return
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      closeMenu(true)
+      return
+    }
+    if (event.key === 'Tab') {
+      closeMenu(false)
+    }
+  }
 
   return (
     <div className={`cora-custom-select ${disabled ? 'disabled' : ''} ${isOpen ? 'open' : ''}`} ref={containerRef}>
-      <button 
-        type="button" 
+      <button
+        ref={triggerRef}
+        type="button"
         id={id}
         className={`cora-custom-select-trigger ${!selectedOption && placeholder ? 'placeholder' : ''}`}
         onClick={() => {
-          if (disabled) return
-          setIsOpen((current) => {
-            if (current) setSearchTerm('')
-            return !current
-          })
+          if (isOpen) {
+            closeMenu(true)
+            return
+          }
+          openMenu()
         }}
+        onKeyDown={handleTriggerKeyDown}
+        role="combobox"
         aria-haspopup="listbox"
         aria-expanded={isOpen}
+        aria-controls={listboxId}
+        aria-activedescendant={isOpen && activeIndex >= 0 ? `${id}-option-${activeIndex}` : undefined}
       >
         <span className="cora-custom-select-value">
           {selectedOption ? selectedOption.label : (placeholder || 'Select...')}
@@ -489,7 +695,7 @@ function CustomSelect({
         </svg>
       </button>
       {isOpen && (
-        <ul className="cora-custom-select-menu" role="listbox">
+        <ul className="cora-custom-select-menu" role="listbox" id={listboxId} aria-labelledby={id}>
           {searchable && (
             <li className="cora-custom-select-search-wrap">
               <input
@@ -497,22 +703,32 @@ function CustomSelect({
                 className="cora-custom-select-search"
                 value={searchTerm}
                 onChange={(event) => setSearchTerm(event.target.value)}
-                onKeyDown={(event) => event.stopPropagation()}
+                onKeyDown={handleSearchKeyDown}
                 placeholder={searchPlaceholder ?? 'Search options...'}
                 aria-label={searchPlaceholder ?? 'Search options'}
+                aria-controls={listboxId}
+                aria-activedescendant={activeIndex >= 0 ? `${id}-option-${activeIndex}` : undefined}
               />
             </li>
           )}
           {filteredOptions.length === 0 && <li className="cora-custom-select-empty">No matching options</li>}
-          {filteredOptions.map(opt => (
-            <li 
-              key={opt.value} 
-              role="option" 
-              aria-selected={value === opt.value}
-              className={`cora-custom-select-option ${value === opt.value ? 'selected' : ''}`}
-              onClick={() => { onChange(opt.value); setIsOpen(false); setSearchTerm('') }}
-            >
-              {opt.label}
+          {filteredOptions.map((opt, index) => (
+            <li key={opt.value} role="presentation">
+              <button
+                ref={(element) => {
+                  optionRefs.current[index] = element
+                }}
+                id={`${id}-option-${index}`}
+                type="button"
+                role="option"
+                aria-selected={value === opt.value}
+                tabIndex={searchable ? -1 : index === activeIndex ? 0 : -1}
+                className={`cora-custom-select-option ${value === opt.value ? 'selected' : ''} ${index === activeIndex ? 'active' : ''}`}
+                onMouseEnter={() => setActiveIndex(index)}
+                onClick={() => selectOption(opt.value)}
+              >
+                {opt.label}
+              </button>
             </li>
           ))}
         </ul>
@@ -523,29 +739,40 @@ function CustomSelect({
 
 function CustomDatePicker({ id, value, onChange, disabled }: { id: string, value: string, onChange: (val: string) => void, disabled?: boolean }) {
   const [isOpen, setIsOpen] = useState(false)
-  const [viewDate, setViewDate] = useState(() => value ? new Date(value) : new Date())
+  const [viewDate, setViewDate] = useState(() => parseIsoDate(value) ?? new Date())
+  const [focusedDate, setFocusedDate] = useState(() => parseIsoDate(value) ?? new Date())
   const containerRef = useRef<HTMLDivElement>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const dayRefs = useRef<Record<string, HTMLButtonElement | null>>({})
 
   useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
+    const handleClickOutside = (event: globalThis.PointerEvent) => {
       if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
         setIsOpen(false)
       }
     }
-    document.addEventListener('mousedown', handleClickOutside)
-    return () => document.removeEventListener('mousedown', handleClickOutside)
+    document.addEventListener('pointerdown', handleClickOutside)
+    return () => document.removeEventListener('pointerdown', handleClickOutside)
   }, [])
+
+  useEffect(() => {
+    if (!isOpen) return
+    const baseDate = parseIsoDate(value) ?? new Date()
+    setViewDate(new Date(baseDate.getFullYear(), baseDate.getMonth(), 1))
+    setFocusedDate(baseDate)
+  }, [isOpen, value])
 
   const currentYear = viewDate.getFullYear()
   const currentMonth = viewDate.getMonth()
+  const selectedDate = parseIsoDate(value)
 
   const startOfMonth = new Date(currentYear, currentMonth, 1)
   const endOfMonth = new Date(currentYear, currentMonth + 1, 0)
-  
+
   const startDayOfWeek = startOfMonth.getDay()
   const daysInMonth = endOfMonth.getDate()
 
-  const days = []
+  const days: (Date | null)[] = []
   for (let i = 0; i < startDayOfWeek; i++) {
     days.push(null)
   }
@@ -557,32 +784,123 @@ function CustomDatePicker({ id, value, onChange, disabled }: { id: string, value
   const handleNextMonth = () => setViewDate(new Date(currentYear, currentMonth + 1, 1))
 
   const handleSelect = (d: Date) => {
-    const y = d.getFullYear()
-    const m = String(d.getMonth() + 1).padStart(2, '0')
-    const day = String(d.getDate()).padStart(2, '0')
-    onChange(`${y}-${m}-${day}`)
+    onChange(formatIsoDate(d))
     setIsOpen(false)
+    window.setTimeout(() => triggerRef.current?.focus(), 0)
   }
 
-  const formatDisplay = (val: string) => {
-    if (!val) return ''
-    const [y, m, d] = val.split('-')
-    if (!y || !m || !d) return ''
-    return `${d}/${m}/${y}`
+  useEffect(() => {
+    if (!isOpen) return
+    const focusKey = formatIsoDate(focusedDate)
+    window.setTimeout(() => dayRefs.current[focusKey]?.focus(), 0)
+  }, [focusedDate, isOpen])
+
+  const moveFocusedDate = (delta: number) => {
+    const nextDate = new Date(focusedDate.getFullYear(), focusedDate.getMonth(), focusedDate.getDate() + delta)
+    setFocusedDate(nextDate)
+    setViewDate(new Date(nextDate.getFullYear(), nextDate.getMonth(), 1))
+  }
+
+  const jumpWithinWeek = (direction: 'start' | 'end') => {
+    const currentDay = focusedDate.getDay()
+    moveFocusedDate(direction === 'start' ? -currentDay : 6 - currentDay)
+  }
+
+  const changeViewedMonth = (delta: number) => {
+    const nextDate = new Date(focusedDate.getFullYear(), focusedDate.getMonth() + delta, focusedDate.getDate())
+    setFocusedDate(nextDate)
+    setViewDate(new Date(nextDate.getFullYear(), nextDate.getMonth(), 1))
+  }
+
+  const closeCalendar = (returnFocus = false) => {
+    setIsOpen(false)
+    if (returnFocus) window.setTimeout(() => triggerRef.current?.focus(), 0)
+  }
+
+  const handleTriggerKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>) => {
+    if (disabled) return
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp' || event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault()
+      setIsOpen(true)
+      return
+    }
+    if (event.key === 'Escape' && isOpen) {
+      event.preventDefault()
+      closeCalendar(true)
+    }
+  }
+
+  const handleDayKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>, date: Date) => {
+    if (event.key === 'ArrowRight') {
+      event.preventDefault()
+      moveFocusedDate(1)
+      return
+    }
+    if (event.key === 'ArrowLeft') {
+      event.preventDefault()
+      moveFocusedDate(-1)
+      return
+    }
+    if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      moveFocusedDate(7)
+      return
+    }
+    if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      moveFocusedDate(-7)
+      return
+    }
+    if (event.key === 'Home') {
+      event.preventDefault()
+      jumpWithinWeek('start')
+      return
+    }
+    if (event.key === 'End') {
+      event.preventDefault()
+      jumpWithinWeek('end')
+      return
+    }
+    if (event.key === 'PageUp') {
+      event.preventDefault()
+      changeViewedMonth(-1)
+      return
+    }
+    if (event.key === 'PageDown') {
+      event.preventDefault()
+      changeViewedMonth(1)
+      return
+    }
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault()
+      handleSelect(date)
+      return
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      closeCalendar(true)
+      return
+    }
+    if (event.key === 'Tab') {
+      closeCalendar(false)
+    }
   }
 
   return (
     <div className={`cora-custom-select ${disabled ? 'disabled' : ''} ${isOpen ? 'open' : ''}`} ref={containerRef}>
-      <button 
-        type="button" 
+      <button
+        ref={triggerRef}
+        type="button"
         id={id}
         className={`cora-custom-select-trigger ${!value ? 'placeholder' : ''}`}
         onClick={() => !disabled && setIsOpen(!isOpen)}
+        onKeyDown={handleTriggerKeyDown}
         aria-haspopup="dialog"
         aria-expanded={isOpen}
+        aria-controls={`${id}-calendar`}
       >
         <span className="cora-custom-select-value">
-          {formatDisplay(value) || 'Select date...'}
+          {formatDateDisplay(value) || 'Select date...'}
         </span>
         <svg className="cora-custom-select-icon" style={{ transform: 'none' }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
@@ -592,25 +910,38 @@ function CustomDatePicker({ id, value, onChange, disabled }: { id: string, value
         </svg>
       </button>
       {isOpen && (
-        <div className="cora-date-picker-menu">
+        <div className="cora-date-picker-menu" id={`${id}-calendar`} role="dialog" aria-modal="false" aria-label="Choose collection date">
           <div className="cora-date-picker-head">
-            <button type="button" onClick={handlePrevMonth} className="cora-date-picker-nav">{I.chevL}</button>
+            <button type="button" onClick={handlePrevMonth} className="cora-date-picker-nav" aria-label="Previous month">{I.chevL}</button>
             <div className="cora-date-picker-title">
               {viewDate.toLocaleString('default', { month: 'short', year: 'numeric' })}
             </div>
-            <button type="button" onClick={handleNextMonth} className="cora-date-picker-nav">{I.chevR}</button>
+            <button type="button" onClick={handleNextMonth} className="cora-date-picker-nav" aria-label="Next month">{I.chevR}</button>
           </div>
-          <div className="cora-date-picker-grid">
+          <div className="cora-date-picker-grid" role="grid" aria-labelledby={id}>
             {['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'].map(w => (
-              <div key={w} className="cora-date-picker-dayname">{w}</div>
+              <div key={w} className="cora-date-picker-dayname" role="columnheader">{w}</div>
             ))}
             {days.map((d, i) => (
               d ? (
                 <button
                   key={i}
+                  ref={(element) => {
+                    dayRefs.current[formatIsoDate(d)] = element
+                  }}
                   type="button"
-                  className={`cora-date-picker-day ${value === `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}` ? 'selected' : ''}`}
+                  className={`cora-date-picker-day ${isSameCalendarDay(selectedDate, d) ? 'selected' : ''} ${isSameCalendarDay(focusedDate, d) ? 'focused' : ''}`}
                   onClick={() => handleSelect(d)}
+                  onFocus={() => setFocusedDate(d)}
+                  onKeyDown={(event) => handleDayKeyDown(event, d)}
+                  tabIndex={isSameCalendarDay(focusedDate, d) ? 0 : -1}
+                  aria-selected={isSameCalendarDay(selectedDate, d)}
+                  aria-label={d.toLocaleDateString('en-US', {
+                    weekday: 'long',
+                    year: 'numeric',
+                    month: 'long',
+                    day: 'numeric',
+                  })}
                 >
                   {d.getDate()}
                 </button>
@@ -626,9 +957,10 @@ function CustomDatePicker({ id, value, onChange, disabled }: { id: string, value
 }
 
 function Sidebar({
-  view, onNav, onAdminNav, open, collapsed, onClose, isAdmin,
+  view, adminTab, onNav, onAdminNav, open, collapsed, onClose, isAdmin,
 }: {
   view: View
+  adminTab: AdminTab
   onNav: (v: View) => void
   onAdminNav: (tab: AdminTab) => void
   open: boolean
@@ -638,9 +970,10 @@ function Sidebar({
 }) {
   return (
     <>
-      <div className={`cora-sidebar-backdrop ${open ? 'visible' : ''}`} onClick={onClose} />
+      <div className={`cora-sidebar-backdrop ${open ? 'visible' : ''}`} onClick={onClose} aria-hidden={!open} />
       <aside
         className={`cora-sidebar ${open ? 'open' : ''} ${collapsed ? 'collapsed' : ''}`}
+        aria-label="Primary navigation"
       >
         <div className="cora-sidebar-brand">
           <img src={logoImage} alt="CORA Environment" className="cora-sidebar-brand-img" />
@@ -652,7 +985,7 @@ function Sidebar({
 
         <div className="cora-sidebar-section">
           <div className="cora-sidebar-section-title">Operations</div>
-          <button className={`cora-nav-item ${view === 'form' ? 'active' : ''}`} onClick={() => { onNav('form'); onClose() }} id="nav-new-order">
+          <button className={`cora-nav-item ${view === 'form' ? 'active' : ''}`} onClick={() => { onNav('form'); onClose() }} id="nav-new-order" aria-current={view === 'form' ? 'page' : undefined}>
             {I.plus} New Order
           </button>
           <button
@@ -660,6 +993,7 @@ function Sidebar({
             onClick={() => { onNav('list'); onClose() }}
             disabled={!isAdmin}
             id="nav-orders"
+            aria-current={view === 'list' ? 'page' : undefined}
           >
             {I.clipList} All Orders
           </button>
@@ -668,30 +1002,34 @@ function Sidebar({
         <div className="cora-sidebar-section">
           <div className="cora-sidebar-section-title">Reference</div>
           <button
-            className={`cora-nav-item ${view === 'admin' ? 'active' : ''}`}
+            className={`cora-nav-item ${view === 'admin' && adminTab === 'customers' ? 'active' : ''}`}
             onClick={() => { onAdminNav('customers'); onClose() }}
             disabled={!isAdmin}
+            aria-current={view === 'admin' && adminTab === 'customers' ? 'page' : undefined}
           >
             {I.building} Customers
           </button>
           <button
-            className={`cora-nav-item ${view === 'admin' ? 'active' : ''}`}
+            className={`cora-nav-item ${view === 'admin' && adminTab === 'drivers' ? 'active' : ''}`}
             onClick={() => { onAdminNav('drivers'); onClose() }}
             disabled={!isAdmin}
+            aria-current={view === 'admin' && adminTab === 'drivers' ? 'page' : undefined}
           >
             {I.user} Drivers
           </button>
           <button
-            className={`cora-nav-item ${view === 'admin' ? 'active' : ''}`}
+            className={`cora-nav-item ${view === 'admin' && adminTab === 'vehicles' ? 'active' : ''}`}
             onClick={() => { onAdminNav('vehicles'); onClose() }}
             disabled={!isAdmin}
+            aria-current={view === 'admin' && adminTab === 'vehicles' ? 'page' : undefined}
           >
             {I.truck} Vehicles
           </button>
           <button
-            className={`cora-nav-item ${view === 'admin' ? 'active' : ''}`}
+            className={`cora-nav-item ${view === 'admin' && adminTab === 'waste' ? 'active' : ''}`}
             onClick={() => { onAdminNav('waste'); onClose() }}
             disabled={!isAdmin}
+            aria-current={view === 'admin' && adminTab === 'waste' ? 'page' : undefined}
           >
             {I.recycle} Waste Categories
           </button>
@@ -711,7 +1049,12 @@ function ToastNotif({ toast, onClose }: { toast: Toast; onClose: () => void }) {
   }, [onClose, toast.actionLabel, toast.durationMs])
   return (
     <div className="cora-toast-wrap">
-      <div className={`cora-toast ${toast.type}`} role="alert">
+      <div
+        className={`cora-toast ${toast.type}`}
+        role={toast.type === 'error' ? 'alert' : 'status'}
+        aria-live={toast.type === 'error' ? 'assertive' : 'polite'}
+        aria-atomic="true"
+      >
         <span className="cora-toast-icon">{toast.type === 'success' ? '✓' : '✕'}</span>
         <span className="cora-toast-text">{toast.text}</span>
         {toast.actionLabel && toast.onAction && (
@@ -1410,6 +1753,11 @@ function StepCustomer({
   return (
     <div className="cora-form-grid" key="step-customer">
       <div className="cora-section-divider"><span>Customer Details</span></div>
+      <div className="cora-field span">
+        <p className="cora-field-hint">
+          Follow the customer hierarchy shown here so the order is linked to the correct site and sub-location.
+        </p>
+      </div>
       {visibleLevels.map((level) => {
         const levelIndex = CUSTOMER_LEVELS.indexOf(level)
         const options = levelOptions[levelIndex]
@@ -1457,6 +1805,7 @@ function StepCustomer({
           />
           <span className="cora-switch-label">{form.IsAdhocCustomer ? 'Yes' : 'No'}</span>
         </div>
+        <p className="cora-field-hint">Use this only when the customer does not exist in the reference list yet.</p>
       </div>
     </div>
   )
@@ -1872,7 +2221,7 @@ function CropAdjustModal({
     return () => window.removeEventListener('resize', drawCropCanvas)
   }, [drawCropCanvas])
 
-  const pointerToFrame = (event: PointerEvent<HTMLElement>) => {
+  const pointerToFrame = (event: ReactPointerEvent<HTMLElement>) => {
     const canvas = canvasRef.current
     if (!canvas) return null
     const rect = canvas.getBoundingClientRect()
@@ -1882,7 +2231,7 @@ function CropAdjustModal({
     }
   }
 
-  const startInteraction = (event: PointerEvent<HTMLElement>, mode: 'move' | 'resize') => {
+  const startInteraction = (event: ReactPointerEvent<HTMLElement>, mode: 'move' | 'resize') => {
     event.preventDefault()
     event.currentTarget.setPointerCapture(event.pointerId)
     const point = pointerToFrame(event)
@@ -1895,7 +2244,7 @@ function CropAdjustModal({
     }
   }
 
-  const startDraw = (event: PointerEvent<HTMLDivElement>) => {
+  const startDraw = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (!(event.target instanceof HTMLCanvasElement)) return
     event.preventDefault()
     event.target.setPointerCapture(event.pointerId)
@@ -1911,7 +2260,7 @@ function CropAdjustModal({
     }
   }
 
-  const moveInteraction = (event: PointerEvent<HTMLDivElement>) => {
+  const moveInteraction = (event: ReactPointerEvent<HTMLDivElement>) => {
     const interaction = interactionRef.current
     const point = pointerToFrame(event)
     if (!interaction || !point) return
@@ -1944,7 +2293,7 @@ function CropAdjustModal({
     })
   }
 
-  const endInteraction = (event: PointerEvent<HTMLDivElement>) => {
+  const endInteraction = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (interactionRef.current && event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId)
     }
@@ -2182,6 +2531,11 @@ function StepAssignment({
         />
       )}
       <div className="cora-section-divider"><span>Resource Assignment</span></div>
+      <div className="cora-field span">
+        <p className="cora-field-hint">
+          Driver and vehicle are optional, but each waste line should include a category and tonnage before you continue.
+        </p>
+      </div>
       <div className="cora-field">
         <label className="cora-label" htmlFor="f-driver">Driver</label>
         <CustomSelect
@@ -2212,6 +2566,10 @@ function StepAssignment({
         <div className="cora-waste-lines">
           {form.WasteItems.map((line, index) => (
             <div className="cora-waste-line" key={line.id}>
+              <div className="cora-waste-line-head">
+                <strong>Waste item {index + 1}</strong>
+                <span>Capture the material, tonnage, and optional scale evidence for this line.</span>
+              </div>
               <div className="cora-field">
                 <label className="cora-label" htmlFor={`f-waste-category-${line.id}`}>Waste Category</label>
                 <CustomSelect
@@ -2232,6 +2590,7 @@ function StepAssignment({
                   type="number"
                   min="0"
                   step="0.01"
+                  inputMode="decimal"
                   placeholder="e.g. 1.5"
                   value={line.Tonnage}
                   onChange={(e) => updateWasteLine(line.id, { Tonnage: e.target.value })}
@@ -2240,6 +2599,7 @@ function StepAssignment({
               </div>
               <div className="cora-field cora-scale-ocr">
                 <label className="cora-label" htmlFor={`f-scale-photo-${line.id}`}>Scale photo</label>
+                <p className="cora-field-hint">Take or choose a clear scale photo, then adjust the crop to help OCR detect the reading.</p>
                 {line.scalePhotoPreviewUrl && (
                   <img className="cora-scale-preview" src={line.scalePhotoPreviewUrl} alt={`Scale photo ${index + 1} preview`} />
                 )}
@@ -2251,7 +2611,7 @@ function StepAssignment({
                 )}
                 <div className="cora-scale-actions">
                   <label className={`cora-btn cora-btn-secondary ${busy ? 'disabled' : ''}`} htmlFor={`f-scale-photo-${line.id}`}>
-                    {line.scalePhotoPreviewUrl ? 'Replace scale photo' : 'Scan scale'}
+                    {line.scalePhotoPreviewUrl ? 'Replace scale photo' : 'Take or choose scale photo'}
                   </label>
                   {line.scalePhotoPreviewUrl && (
                     <button className="cora-btn cora-btn-outline" type="button" onClick={() => setCropEditingLineId(line.id)} disabled={busy}>
@@ -2382,14 +2742,14 @@ function SignaturePad({
     return () => window.removeEventListener('resize', handleResize)
   }, [prepareCanvas])
 
-  const pointFromEvent = (event: PointerEvent<HTMLCanvasElement>) => {
+  const pointFromEvent = (event: ReactPointerEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current
     if (!canvas) return null
     const rect = canvas.getBoundingClientRect()
     return { x: event.clientX - rect.left, y: event.clientY - rect.top }
   }
 
-  const beginDrawing = (event: PointerEvent<HTMLCanvasElement>) => {
+  const beginDrawing = (event: ReactPointerEvent<HTMLCanvasElement>) => {
     if (disabled) return
     const point = pointFromEvent(event)
     if (!point) return
@@ -2400,7 +2760,7 @@ function SignaturePad({
     lastPointRef.current = point
   }
 
-  const draw = (event: PointerEvent<HTMLCanvasElement>) => {
+  const draw = (event: ReactPointerEvent<HTMLCanvasElement>) => {
     if (!drawingRef.current || disabled) return
     const canvas = canvasRef.current
     const ctx = canvas?.getContext('2d')
@@ -2517,14 +2877,14 @@ function PhotoUpload({
               <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
             </svg>
           </span>
-          <span className="cora-photo-dropzone-label">Drop image here or choose photo</span>
-          <span className="cora-photo-dropzone-hint">Camera and image files supported</span>
+          <span className="cora-photo-dropzone-label">Tap to take or choose a photo</span>
+          <span className="cora-photo-dropzone-hint">Use the camera on mobile, or drag and drop an image on desktop.</span>
         </label>
       )}
       {file && <span className="cora-photo-name">{file.name}</span>}
       <div className="cora-photo-actions">
         <label className={`cora-btn cora-btn-secondary ${disabled ? 'disabled' : ''}`} htmlFor={id}>
-          {file ? 'Replace photo' : 'Choose photo'}
+          {file ? 'Replace photo' : 'Take or choose photo'}
         </label>
         {file && (
           <button className="cora-btn cora-btn-outline" type="button" onClick={() => onChange(null)} disabled={disabled}>
@@ -2565,6 +2925,7 @@ function StepProof({
       <div className="cora-field span">
         <label className="cora-label">Signature <span className="req">*</span></label>
         <SignaturePad value={signatureDataUrl} onChange={setSignatureDataUrl} disabled={busy} />
+        <p className="cora-field-hint">The service order cannot be submitted until the signature is captured.</p>
       </div>
 
       <div className="cora-section-divider"><span>Collection Photos</span></div>
@@ -2577,6 +2938,7 @@ function StepProof({
           onChange={setBeforePhotoFile}
           disabled={busy}
         />
+        <p className="cora-field-hint">Optional. Helpful when you need a record of the area before collection.</p>
       </div>
       <div className="cora-field">
         <PhotoUpload
@@ -2587,6 +2949,7 @@ function StepProof({
           onChange={setAfterPhotoFile}
           disabled={busy}
         />
+        <p className="cora-field-hint">Optional. Helpful when you need a record of the area after collection.</p>
       </div>
     </div>
   )
@@ -2684,6 +3047,9 @@ function StepReview({
               <span className="cora-proof-preview-label">After collection</span>
               <img src={afterPhotoPreviewUrl} alt="After collection preview" />
             </div>
+          )}
+          {!beforePhotoPreviewUrl && !afterPhotoPreviewUrl && !signatureDataUrl && (
+            <div className="cora-proof-preview-empty">No proof captured yet.</div>
           )}
         </div>
       </div>
@@ -2856,8 +3222,8 @@ function App() {
         if (draft) {
           setForm(await restorePersistedForm(draft.payload.form))
           setSignatureDataUrl(draft.payload.signatureDataUrl)
-          setBeforePhotoFile(fromStoredMediaFile(draft.payload.beforePhoto))
-          setAfterPhotoFile(fromStoredMediaFile(draft.payload.afterPhoto))
+          setBeforePhotoFile(await fromStoredMediaFile(draft.payload.beforePhoto))
+          setAfterPhotoFile(await fromStoredMediaFile(draft.payload.afterPhoto))
           setStep(draft.step)
           setSubmitted(draft.submissionStatus === 'queued')
           setSubmissionMode(draft.submissionStatus)
@@ -2902,21 +3268,23 @@ function App() {
   useEffect(() => {
     if (!draftReady) return
     const handle = window.setTimeout(() => {
-      const draft: PersistedDraft = {
-        id: 'active',
-        clientSubmissionId: draftClientSubmissionId,
-        step,
-        updatedAt: new Date().toISOString(),
-        locked: submissionMode === 'queued',
-        submissionStatus: submissionMode,
-        payload: {
-          form: buildPersistedForm(form),
-          signatureDataUrl,
-          beforePhoto: toStoredMediaFile(beforePhotoFile, 'before-photo.jpg'),
-          afterPhoto: toStoredMediaFile(afterPhotoFile, 'after-photo.jpg'),
-        },
-      }
-      void saveDraft(draft)
+      void (async () => {
+        const draft: PersistedDraft = {
+          id: 'active',
+          clientSubmissionId: draftClientSubmissionId,
+          step,
+          updatedAt: new Date().toISOString(),
+          locked: submissionMode === 'queued',
+          submissionStatus: submissionMode,
+          payload: {
+            form: await buildPersistedForm(form),
+            signatureDataUrl,
+            beforePhoto: await toStoredMediaFile(beforePhotoFile, 'before-photo.jpg'),
+            afterPhoto: await toStoredMediaFile(afterPhotoFile, 'after-photo.jpg'),
+          },
+        }
+        await saveDraft(draft)
+      })()
     }, 300)
     return () => window.clearTimeout(handle)
   }, [
@@ -3473,10 +3841,10 @@ function App() {
 
     try {
       const payload = {
-        form: buildPersistedForm(form),
+        form: await buildPersistedForm(form),
         signatureDataUrl,
-        beforePhoto: toStoredMediaFile(beforePhotoFile, 'before-photo.jpg'),
-        afterPhoto: toStoredMediaFile(afterPhotoFile, 'after-photo.jpg'),
+        beforePhoto: await toStoredMediaFile(beforePhotoFile, 'before-photo.jpg'),
+        afterPhoto: await toStoredMediaFile(afterPhotoFile, 'after-photo.jpg'),
       }
       const queuedSubmission = await enqueueSubmission(draftClientSubmissionId, payload)
       await saveDraft({
@@ -3520,6 +3888,60 @@ function App() {
     return idx < step
   }
 
+  const activeReferenceLabel: Record<AdminTab, string> = {
+    customers: 'Customers',
+    drivers: 'Drivers',
+    vehicles: 'Vehicles',
+    waste: 'Waste Categories',
+  }
+  const breadcrumbCurrentLabel = view === 'form'
+    ? 'New Service Order'
+    : view === 'admin'
+      ? `Admin / ${activeReferenceLabel[adminTab]}`
+      : 'All Orders'
+  const pageTitle = view === 'form'
+    ? 'Create Service Order'
+    : view === 'admin'
+      ? activeReferenceLabel[adminTab]
+      : 'Service Orders'
+  const pageDescription = view === 'form'
+    ? 'Complete the guided flow below to create a new service order from any device.'
+    : view === 'admin'
+      ? `Manage ${activeReferenceLabel[adminTab].toLowerCase()} used by the service order workflow.`
+      : 'Review service order records and filter the history by customer, resource, or collection date.'
+
+  const syncStatus = !isOnline
+    ? 'offline'
+    : queueSyncing
+      ? 'syncing'
+      : queueLastError
+        ? 'error'
+        : queuePendingCount > 0
+          ? 'pending'
+          : 'ready'
+  const syncHeadline = syncStatus === 'offline'
+    ? 'Saved locally while offline'
+    : syncStatus === 'syncing'
+      ? 'Sync in progress'
+      : syncStatus === 'error'
+        ? 'Sync needs attention'
+        : syncStatus === 'pending'
+          ? 'Queued submissions waiting to sync'
+          : 'Everything is up to date'
+  const syncBody = syncStatus === 'offline'
+    ? 'New submissions stay on this device and will sync automatically after the connection returns.'
+    : syncStatus === 'syncing'
+      ? 'Queued service orders are being sent to Power Apps now.'
+      : syncStatus === 'error'
+        ? 'The last background sync failed. Review the error below and retry when you are ready.'
+        : syncStatus === 'pending'
+          ? `${queuePendingCount} queued submission${queuePendingCount === 1 ? '' : 's'} still need to sync.`
+          : 'Live reference data is connected and there are no queued submissions.'
+  const referenceDataSummary = usingCachedReferenceData
+    ? `Using cached reference data${cacheFetchedAt ? ` from ${new Date(cacheFetchedAt).toLocaleString()}` : ''}.`
+    : 'Reference data is live and ready.'
+  const stepProgress = submitted ? 100 : Math.round(((step + 1) / STEPS.length) * 100)
+
   /* ── Render ── */
   return (
     <div className="cora-shell">
@@ -3532,6 +3954,7 @@ function App() {
 
       <Sidebar
         view={view}
+        adminTab={adminTab}
         onNav={navigate}
         onAdminNav={openAdmin}
         open={sidebarOpen}
@@ -3549,7 +3972,7 @@ function App() {
           <div className="cora-breadcrumb">
             CORA <span className="cora-breadcrumb-sep">/</span>{' '}
             <span className="cora-breadcrumb-current">
-              {view === 'form' ? 'New Service Order' : view === 'admin' ? 'Admin' : 'All Orders'}
+              {breadcrumbCurrentLabel}
             </span>
           </div>
         </div>
@@ -3557,30 +3980,23 @@ function App() {
         <div className="cora-page">
           {/* Header */}
           <div className="cora-page-header">
-            <h1>{view === 'form' ? 'Create Service Order' : view === 'admin' ? 'Admin Reference Data' : 'Service Orders'}</h1>
-            <p>{view === 'form'
-              ? 'Complete the wizard below to submit a new service order.'
-              : view === 'admin'
-                ? 'Add drivers, vehicles, and waste categories for the service order form.'
-                : 'View and manage all service order records.'}</p>
+            <h1>{pageTitle}</h1>
+            <p>{pageDescription}</p>
           </div>
 
-          <div className="cora-sync-banner">
-            <div className="cora-sync-banner-copy">
-              <strong>{isOnline ? 'Online' : 'Offline'}</strong>
-              <span>
-                {usingCachedReferenceData
-                  ? ` Using cached reference data${cacheFetchedAt ? ` from ${new Date(cacheFetchedAt).toLocaleString()}` : ''}.`
-                  : ' Live reference data connected.'}
-              </span>
-              <span>
-                {queuePendingCount > 0
-                  ? ` ${queuePendingCount} queued submission${queuePendingCount === 1 ? '' : 's'} pending sync.`
-                  : ' No queued submissions.'}
-              </span>
+          <div className={`cora-sync-banner is-${syncStatus}`} role="status" aria-live="polite">
+            <div className="cora-sync-banner-main">
+              <span className="cora-sync-banner-badge">{syncHeadline}</span>
+              <strong>{syncBody}</strong>
+              <p>{referenceDataSummary}</p>
               {queueLastError && <span className="cora-sync-banner-error">Last sync error: {queueLastError}</span>}
             </div>
             <div className="cora-sync-banner-actions">
+              <span className="cora-sync-banner-stat">
+                {queuePendingCount > 0
+                  ? `${queuePendingCount} queued submission${queuePendingCount === 1 ? '' : 's'}`
+                  : '0 queued submissions'}
+              </span>
               <button
                 className="cora-btn cora-btn-outline"
                 type="button"
@@ -3642,6 +4058,17 @@ function App() {
                 ))}
               </div>
 
+              <div className="cora-mobile-progress" aria-label={`Step ${submitted ? STEPS.length : step + 1} of ${STEPS.length}`}>
+                <div className="cora-mobile-progress-top">
+                  <strong>{submitted ? 'Completed' : STEPS[step].label}</strong>
+                  <span>{submitted ? 'All steps done' : `Step ${step + 1} of ${STEPS.length}`}</span>
+                </div>
+                <div className="cora-mobile-progress-track" aria-hidden="true">
+                  <span style={{ width: `${stepProgress}%` }} />
+                </div>
+                <p>{submitted ? 'Your latest order has been saved.' : STEPS[step].desc}</p>
+              </div>
+
               {/* Card */}
               <div className="cora-card">
                 <div className="cora-card-head">
@@ -3654,6 +4081,13 @@ function App() {
                 </div>
 
                 <div className="cora-card-body">
+                  {loadState === 'loaded' && !submitted && (
+                    <div className="cora-step-context" aria-live="polite">
+                      <span className="cora-step-context-eyebrow">What to complete now</span>
+                      <strong>{STEP_GUIDANCE[step].title}</strong>
+                      <p>{STEP_GUIDANCE[step].body}</p>
+                    </div>
+                  )}
                   {loadState === 'loading' && (
                     <div className="cora-form-grid">
                       {Array.from({ length: 4 }).map((_, i) => (
@@ -3755,13 +4189,13 @@ function App() {
                         disabled={submitting || step === LAST_STEP}
                         id="btn-clear-step"
                       >
-                        {I.x} Clear Page
+                        {I.x} Clear This Step
                       </button>
                     </div>
                     <div className="cora-card-foot-right">
                       {step > 0 && (
                         <button className="cora-btn cora-btn-outline" onClick={prev} disabled={submitting} id="btn-prev">
-                          {I.chevL} Back
+                          {I.chevL} Back to {STEPS[step - 1].label}
                         </button>
                       )}
                       {step < LAST_STEP ? (
@@ -3771,7 +4205,7 @@ function App() {
                           disabled={submitting}
                           id="btn-next"
                         >
-                          Next {I.chevR}
+                          Continue to {STEPS[step + 1].label} {I.chevR}
                         </button>
                       ) : (
                         <button
@@ -3781,8 +4215,8 @@ function App() {
                           id="btn-submit"
                         >
                           {submitting
-                            ? <><span className="cora-spinner" /> Submitting…</>
-                            : <>{I.send} Submit Order</>}
+                            ? <><span className="cora-spinner" /> Saving order…</>
+                            : <>{I.send} {isOnline ? 'Submit Order' : 'Save Offline'}</>}
                         </button>
                       )}
                     </div>
