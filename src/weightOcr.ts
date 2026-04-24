@@ -57,7 +57,7 @@ const MIN_PLAUSIBLE_DISPLAY_VALUE = 0
 const MAX_PLAUSIBLE_DISPLAY_VALUE = 100000
 const MIN_RELIABLE_SCORE = 120
 const MIN_RELIABLE_CONFIDENCE = 70
-const ENABLE_LOCAL_OCR = false
+const MIN_SCORE_MARGIN = 12
 
 interface Bbox {
   left: number
@@ -70,6 +70,22 @@ interface ImageVariantOptions {
   mode: 'gray' | 'binary' | 'invertedBinary'
   dilateDark?: boolean
   whiteBorder?: boolean
+}
+
+interface OcrStageOutput {
+  candidates: OcrCandidate[]
+  rawTexts: string[]
+}
+
+interface RemoteAssessment {
+  usable: boolean
+  reasons: string[]
+}
+
+interface CandidateAgreementSummary {
+  supportWeight: number
+  agreementReasons: string[]
+  penaltyReasons: string[]
 }
 
 let workerPromise: Promise<Tesseract.Worker> | null = null
@@ -504,7 +520,7 @@ export const preprocessImageForOcr = async (source: File | string, cropRect?: Cr
   }
 
   const selectedCrop = cropImageData(imageData, selectedBbox)
-  const sevenSegmentText = ENABLE_LOCAL_OCR ? recognizeSevenSegmentText(selectedCrop) : ''
+  const sevenSegmentText = recognizeSevenSegmentText(selectedCrop)
   const imageDataVariants = cropRect
     ? [selectedCrop]
     : [
@@ -641,11 +657,80 @@ const isCleanUnitlessNumber = (candidate: OcrCandidate) => {
   return compactText === candidate.parsed.rawNumber && isPlausibleDisplayValue(candidate.parsed.displayValue)
 }
 
-const isMicrosoftOnlyCandidate = (candidate: OcrCandidate) =>
-  !ENABLE_LOCAL_OCR &&
-  candidate.source === 'remote' &&
-  isPlausibleDisplayValue(candidate.parsed.displayValue) &&
-  candidate.confidence >= MIN_RELIABLE_CONFIDENCE
+const isRemoteCandidate = (candidate: OcrCandidate) => candidate.source === 'remote'
+
+const getDigitSignature = (rawNumber: string) => rawNumber.replace(/\D/g, '')
+
+const getDecimalPlaces = (rawNumber: string) => {
+  const match = rawNumber.match(/[.,](\d+)$/)
+  return match ? match[1].length : 0
+}
+
+const calibrateConfidence = (source: OcrSource, confidence: number) => {
+  if (source === 'remote') return confidence
+  if (source === 'sevenSegment') return Math.min(96, confidence * 0.92)
+  if (source === 'tesseract') return confidence * 0.74
+  if (source === 'merged') return confidence * 0.68
+  return confidence
+}
+
+const getSourceAgreementWeight = (a: OcrSource, b: OcrSource) => {
+  const pair = [a, b].sort().join(':')
+  if (pair === 'remote:sevenSegment') return 2.8
+  if (pair === 'remote:tesseract') return 2.3
+  if (pair === 'sevenSegment:tesseract') return 2.0
+  if (pair === 'merged:remote') return 1.6
+  if (pair === 'merged:sevenSegment') return 1.3
+  if (pair === 'merged:tesseract') return 1.1
+  return a === b ? 0.45 : 0.9
+}
+
+const summarizeAgreement = (candidate: OcrCandidate, candidates: OcrCandidate[]): CandidateAgreementSummary => {
+  const value = candidate.parsed.displayValue
+  if (value === null) return { supportWeight: 0, agreementReasons: [], penaltyReasons: [] }
+
+  let supportWeight = 0
+  let crossSourceSupport = 0
+  let sameDigitsDifferentDecimal = 0
+  let sameValueDifferentUnit = 0
+  const agreementReasons: string[] = []
+  const penaltyReasons: string[] = []
+  const candidateDigits = getDigitSignature(candidate.parsed.rawNumber)
+  const candidateDecimals = getDecimalPlaces(candidate.parsed.rawNumber)
+
+  for (const other of candidates) {
+    if (other === candidate || other.parsed.displayValue === null) continue
+    const sameValue =
+      Math.abs(other.parsed.displayValue - value) <= Math.max(0.005, value * 0.01)
+    const otherDigits = getDigitSignature(other.parsed.rawNumber)
+    const otherDecimals = getDecimalPlaces(other.parsed.rawNumber)
+
+    if (sameValue) {
+      const weight = getSourceAgreementWeight(candidate.source, other.source)
+      supportWeight += weight
+      if (candidate.source !== other.source) crossSourceSupport += 1
+      if (
+        candidate.parsed.unit !== 'unknown' &&
+        other.parsed.unit !== 'unknown' &&
+        candidate.parsed.unit !== other.parsed.unit
+      ) {
+        sameValueDifferentUnit += 1
+      }
+      continue
+    }
+
+    if (candidateDigits && candidateDigits === otherDigits && candidateDecimals !== otherDecimals) {
+      sameDigitsDifferentDecimal += 1
+    }
+  }
+
+  if (crossSourceSupport > 0) agreementReasons.push('Agrees across OCR passes')
+  if (crossSourceSupport >= 2) agreementReasons.push('Supported by multiple OCR engines')
+  if (sameDigitsDifferentDecimal > 0) penaltyReasons.push('Decimal placement differs across OCR passes')
+  if (sameValueDifferentUnit > 0) penaltyReasons.push('Unit differs across OCR passes')
+
+  return { supportWeight, agreementReasons, penaltyReasons }
+}
 
 const createOcrCandidate = (
   text: string,
@@ -663,58 +748,80 @@ const createOcrCandidate = (
     reasons.push(`Outside ${MIN_PLAUSIBLE_DISPLAY_VALUE}-${MAX_PLAUSIBLE_DISPLAY_VALUE} display range`)
   }
 
+  const calibratedConfidence = calibrateConfidence(source, confidence)
   const unitScore = hasUnit ? 32 : -16
   const decimalScore = parsed.rawNumber.includes('.') || parsed.rawNumber.includes(',') ? 6 : 0
   const plausibleScore = plausible ? 24 : -80
-  const textScore = Math.min(8, text.trim().length)
+  const digitScore = Math.min(10, getDigitSignature(parsed.rawNumber).length * 2)
+  const textScore = Math.min(6, text.trim().length)
   const sourceScore = source === 'remote' ? 14 : source === 'merged' ? 10 : source === 'sevenSegment' ? 6 : 0
-  const microsoftOnlyScore = !ENABLE_LOCAL_OCR && source === 'remote' && plausible ? 42 : 0
+  const microsoftOnlyScore = source === 'remote' && plausible ? 42 : 0
   const score = parsed.suggestion
-    ? confidence + unitScore + decimalScore + plausibleScore + textScore + sourceScore + sourceBoost + microsoftOnlyScore
+    ? calibratedConfidence + unitScore + decimalScore + plausibleScore + digitScore + textScore + sourceScore + sourceBoost + microsoftOnlyScore
     : 0
   const reliable = (
     score >= MIN_RELIABLE_SCORE &&
-    confidence >= MIN_RELIABLE_CONFIDENCE &&
+    calibratedConfidence >= MIN_RELIABLE_CONFIDENCE &&
     plausible &&
-    (hasUnit || (!ENABLE_LOCAL_OCR && source === 'remote'))
+    (hasUnit || source === 'remote')
   )
 
-  return { source, text, parsed, confidence, score, reliable, reasons }
+  return { source, text, parsed, confidence: calibratedConfidence, score, reliable, reasons }
 }
 
-const selectBestOcrResult = (candidates: OcrCandidate[], rawTexts: string[]): OcrResult => {
+const selectBestOcrResult = (
+  candidates: OcrCandidate[],
+  rawTexts: string[],
+  contextReasons: string[] = [],
+): OcrResult => {
   const usableCandidates = candidates
     .filter((candidate) => candidate.parsed.suggestion && isPlausibleDisplayValue(candidate.parsed.displayValue))
     .map((candidate) => {
       const agreementCount = getAgreementCount(candidate, candidates)
       const agreementBonusCount = Math.min(agreementCount, 3)
       const cleanUnitlessWithAgreement = agreementCount >= 1 && isCleanUnitlessNumber(candidate)
+      const agreement = summarizeAgreement(candidate, candidates)
+      const agreementBonus = agreement.supportWeight * 10
+      const decimalInstabilityPenalty = agreement.penaltyReasons.includes('Decimal placement differs across OCR passes') ? 20 : 0
+      const unitInstabilityPenalty = agreement.penaltyReasons.includes('Unit differs across OCR passes') ? 12 : 0
+      const adjustedScore = candidate.score + agreementBonusCount * 18 + agreementBonus - decimalInstabilityPenalty - unitInstabilityPenalty
       return {
         ...candidate,
-        score: candidate.score + agreementBonusCount * 18,
-        reliable: candidate.reliable || isMicrosoftOnlyCandidate(candidate) || (
-          candidate.score + agreementBonusCount * 18 >= MIN_RELIABLE_SCORE &&
+        score: adjustedScore,
+        reliable: candidate.reliable || (isRemoteCandidate(candidate) && candidate.confidence >= MIN_RELIABLE_CONFIDENCE) || (
+          adjustedScore >= MIN_RELIABLE_SCORE &&
           candidate.confidence >= MIN_RELIABLE_CONFIDENCE &&
           (candidate.parsed.unit !== 'unknown' || cleanUnitlessWithAgreement)
         ),
-        reasons: agreementCount > 0 ? [...candidate.reasons, 'Agrees across OCR passes'] : candidate.reasons,
+        reasons: [...new Set([...candidate.reasons, ...agreement.agreementReasons, ...agreement.penaltyReasons])],
       }
     })
-    .sort((a, b) => b.score - a.score)
+    .sort((a, b) => b.score - a.score || b.confidence - a.confidence)
 
   const best = usableCandidates[0]
   if (best) {
+    const runnerUp = usableCandidates[1]
+    const scoreMargin = runnerUp ? best.score - runnerUp.score : Infinity
+    const bestAgreementSupport = summarizeAgreement(best, candidates).supportWeight
+    const lowMargin = Number.isFinite(scoreMargin) && scoreMargin < MIN_SCORE_MARGIN
+    const reliable = best.reliable && (!lowMargin || bestAgreementSupport >= 2.3)
     const rawText = [best.text, ...rawTexts.filter(Boolean)]
       .filter(Boolean)
       .join('\n---\n')
     return {
       rawText,
       parsed: best.parsed,
-      reliable: best.reliable,
+      reliable,
       requiresConfirmation: true,
       confidence: Math.max(0, Math.min(100, best.confidence)),
       candidates: usableCandidates,
-      reasons: best.reasons,
+      reasons: [
+        ...new Set([
+          ...contextReasons,
+          ...best.reasons,
+          ...(lowMargin ? ['Top OCR candidates were close in score'] : []),
+        ]),
+      ],
     }
   }
 
@@ -727,7 +834,9 @@ const selectBestOcrResult = (candidates: OcrCandidate[], rawTexts: string[]): Oc
     requiresConfirmation: Boolean(parsed.suggestion),
     confidence: 0,
     candidates,
-    reasons: rawText ? ['No OCR candidate passed plausibility checks'] : ['No OCR text was returned'],
+    reasons: rawText
+      ? [...new Set([...contextReasons, 'No OCR candidate passed plausibility checks'])]
+      : [...new Set([...contextReasons, 'No OCR text was returned'])],
   }
 }
 
@@ -771,35 +880,106 @@ const getRemoteTextItems = (payload: unknown): { text: string; confidence: numbe
   return items
 }
 
-const runRemoteWeightOcr = async (imageDataUrl?: string) => {
-  const candidates: OcrCandidate[] = []
+const pushOcrTextItems = (
+  target: OcrStageOutput,
+  items: { text: string; confidence: number }[],
+  source: OcrSource,
+) => {
+  target.rawTexts.push(...items.map((item) => item.text))
+  target.candidates.push(...items.map((item) => createOcrCandidate(item.text, source, item.confidence)))
+}
+
+const getBestCandidate = (candidates: OcrCandidate[]) =>
+  [...candidates].sort((a, b) => b.score - a.score || b.confidence - a.confidence)[0]
+
+const assessRemoteStage = (remote: OcrStageOutput): RemoteAssessment => {
+  if (remote.rawTexts.length === 0) {
+    return { usable: false, reasons: ['Microsoft OCR returned no text'] }
+  }
+
+  const parseableCandidates = remote.candidates.filter((candidate) => candidate.parsed.suggestion)
+  if (parseableCandidates.length === 0) {
+    return { usable: false, reasons: ['Microsoft OCR returned no parseable number'] }
+  }
+
+  const plausibleCandidates = parseableCandidates.filter((candidate) => isPlausibleDisplayValue(candidate.parsed.displayValue))
+  if (plausibleCandidates.length === 0) {
+    return { usable: false, reasons: ['Remote result failed plausibility checks'] }
+  }
+
+  const bestPlausibleCandidate = getBestCandidate(plausibleCandidates)
+  if (!bestPlausibleCandidate || bestPlausibleCandidate.confidence < MIN_RELIABLE_CONFIDENCE) {
+    return { usable: false, reasons: ['Microsoft OCR confidence too low'] }
+  }
+
+  return { usable: true, reasons: [] }
+}
+
+const runRemoteWeightOcr = async (imageDataUrl?: string): Promise<OcrStageOutput> => {
+  const remote: OcrStageOutput = { candidates: [], rawTexts: [] }
 
   if (imageDataUrl) {
     try {
       const result = await RecognizeScaleTextService.Run({
         file: dataUrlToFlowFile(imageDataUrl),
       })
-      candidates.push(...getRemoteTextItems(result.data).map((item) => createOcrCandidate(item.text, 'remote', item.confidence)))
+      pushOcrTextItems(remote, getRemoteTextItems(result.data), 'remote')
     } catch {
       // Keep local/browser OCR usable when the Power Apps host or flow connection is unavailable.
     }
   }
 
   const endpoint = getRemoteOcrEndpoint()
-  if (!endpoint || !imageDataUrl) return candidates
+  if (!endpoint || !imageDataUrl) return remote
 
   try {
     const body = new FormData()
     body.append('image', await dataUrlToBlob(imageDataUrl), 'scale-crop.jpg')
     const response = await fetch(endpoint, { method: 'POST', body })
-    if (!response.ok) return candidates
+    if (!response.ok) return remote
     const payload: unknown = await response.json()
-    candidates.push(...getRemoteTextItems(payload).map((item) => createOcrCandidate(item.text, 'remote', item.confidence)))
+    pushOcrTextItems(remote, getRemoteTextItems(payload), 'remote')
   } catch {
-    return candidates
+    return remote
   }
 
-  return candidates
+  return remote
+}
+
+const runLocalWeightOcr = async (imageDataUrls: string[], candidateTexts: string[]): Promise<OcrStageOutput> => {
+  const local: OcrStageOutput = { candidates: [], rawTexts: [] }
+  const worker = await getWeightOcrWorker()
+  const pageSegModes = [Tesseract.PSM.SINGLE_LINE, Tesseract.PSM.SPARSE_TEXT]
+  const unitTexts: string[] = []
+  const numericTexts: string[] = [...candidateTexts]
+
+  for (const imageDataUrl of imageDataUrls) {
+    for (const pageSegMode of pageSegModes) {
+      for (const whitelist of [OCR_CHAR_WHITELIST, OCR_NUMBER_WHITELIST]) {
+        await worker.setParameters({
+          tessedit_char_whitelist: whitelist,
+          tessedit_pageseg_mode: pageSegMode,
+        })
+        const result = await worker.recognize(imageDataUrl)
+        const rawText = result.data.text
+        local.rawTexts.push(rawText)
+        if (whitelist === OCR_CHAR_WHITELIST) unitTexts.push(rawText)
+        else numericTexts.push(rawText)
+        local.candidates.push(createOcrCandidate(rawText, 'tesseract', result.data.confidence))
+      }
+    }
+  }
+
+  for (const numericText of numericTexts) {
+    for (const unitText of unitTexts) {
+      const mergedText = mergeNumericAndUnitText(numericText, unitText)
+      if (!mergedText) continue
+      local.rawTexts.push(mergedText)
+      local.candidates.push(createOcrCandidate(mergedText, 'merged', 80, 4))
+    }
+  }
+
+  return local
 }
 
 export const runWeightOcr = async (
@@ -809,48 +989,25 @@ export const runWeightOcr = async (
 ): Promise<OcrResult> => {
   const run = async () => {
     const imageVariants = Array.isArray(imageDataUrls) ? imageDataUrls : [imageDataUrls]
-    const candidates: OcrCandidate[] = []
-    const rawTexts: string[] = []
+    const precomputed: OcrStageOutput = {
+      candidates: candidateTexts.map((candidateText) => createOcrCandidate(candidateText, 'sevenSegment', 82)),
+      rawTexts: [...candidateTexts],
+    }
+    const remote = await runRemoteWeightOcr(options.remoteImageDataUrl ?? imageVariants[0])
+    const initialStageCandidates = [...remote.candidates, ...precomputed.candidates]
+    const initialStageTexts = [...remote.rawTexts, ...precomputed.rawTexts]
+    const remoteAssessment = assessRemoteStage(remote)
 
-    candidates.push(...await runRemoteWeightOcr(options.remoteImageDataUrl ?? imageVariants[0]))
-
-    if (ENABLE_LOCAL_OCR) {
-      const worker = await getWeightOcrWorker()
-      const pageSegModes = [Tesseract.PSM.SINGLE_LINE, Tesseract.PSM.SPARSE_TEXT]
-      const unitTexts: string[] = []
-      const numericTexts: string[] = [...candidateTexts]
-
-      for (const candidateText of candidateTexts) {
-        candidates.push(createOcrCandidate(candidateText, 'sevenSegment', 82))
-      }
-
-      for (const imageDataUrl of imageVariants) {
-        for (const pageSegMode of pageSegModes) {
-          for (const whitelist of [OCR_CHAR_WHITELIST, OCR_NUMBER_WHITELIST]) {
-            await worker.setParameters({
-              tessedit_char_whitelist: whitelist,
-              tessedit_pageseg_mode: pageSegMode,
-            })
-            const result = await worker.recognize(imageDataUrl)
-            const rawText = result.data.text
-            rawTexts.push(rawText)
-            if (whitelist === OCR_CHAR_WHITELIST) unitTexts.push(rawText)
-            else numericTexts.push(rawText)
-            candidates.push(createOcrCandidate(rawText, 'tesseract', result.data.confidence))
-          }
-        }
-      }
-
-      for (const numericText of numericTexts) {
-        for (const unitText of unitTexts) {
-          const mergedText = mergeNumericAndUnitText(numericText, unitText)
-          if (!mergedText) continue
-          candidates.push(createOcrCandidate(mergedText, 'merged', 80, 4))
-        }
-      }
+    if (remoteAssessment.usable) {
+      return selectBestOcrResult(initialStageCandidates, initialStageTexts)
     }
 
-    return selectBestOcrResult(candidates, rawTexts)
+    const local = await runLocalWeightOcr(imageVariants, candidateTexts)
+    return selectBestOcrResult(
+      [...initialStageCandidates, ...local.candidates],
+      [...initialStageTexts, ...local.rawTexts],
+      [...remoteAssessment.reasons, 'Fell back to local OCR'],
+    )
   }
 
   const nextRun = ocrQueue.then(run, run)

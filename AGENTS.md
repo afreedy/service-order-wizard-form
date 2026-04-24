@@ -18,6 +18,7 @@ This file gives coding agents the minimum project context needed to work safely 
 - `docs/ARCHITECTURE.md`: runtime flow and code organization notes
 - `docs/DATA-MODEL.md`: SharePoint list and field mapping
 - `docs/OPERATIONS.md`: setup, build, deployment, and troubleshooting
+- `docs/POWER-APPS-OCR.md`: AI Builder OCR flow setup and generated-service integration
 - `power.config.json`: Power Apps configuration and data-source definitions
 
 ## Common Commands
@@ -38,6 +39,15 @@ Optional remote OCR endpoint during local development:
 $env:VITE_WEIGHT_OCR_ENDPOINT="https://your-ocr-endpoint.example/weight"
 npm run dev
 ```
+
+Documented Power Apps flow/data-source workflow for production OCR:
+
+```powershell
+pac connection list
+pac code add-data-source -a "<flow-or-connector-api-name>" -c "<connection-id>"
+```
+
+If the installed Code Apps tooling exposes the newer `power-apps` CLI instead of `pac`, follow [`docs/POWER-APPS-OCR.md`](docs/POWER-APPS-OCR.md) and use the equivalent add-data-source command there.
 
 ## Working Rules
 

@@ -428,28 +428,6 @@ const STEPS = [
 ] as const
 
 const LAST_STEP = STEPS.length - 1
-const STEP_GUIDANCE = [
-  {
-    title: 'Confirm the auto-created order details.',
-    body: 'Check the generated title and set the collection date before moving on.',
-  },
-  {
-    title: 'Choose the exact customer path.',
-    body: 'Pick the customer, location, and any available sub-levels, or open the ad-hoc customer setup for one-off jobs.',
-  },
-  {
-    title: 'Assign resources and record waste.',
-    body: 'Add the driver, vehicle, and every waste line with category, tonnage, and optional scale proof.',
-  },
-  {
-    title: 'Capture proof from the collection.',
-    body: 'The customer signature is required. Before and after photos help validate the job but remain optional.',
-  },
-  {
-    title: 'Review the full service order before sending.',
-    body: 'Use this page to confirm the order details, waste summary, and proof attachments before submission.',
-  },
-] as const
 
 const parseIsoDate = (value: string) => {
   const [year, month, day] = value.split('-').map(Number)
@@ -2616,7 +2594,6 @@ function StepAssignment({
               </div>
               <div className="cora-field cora-scale-ocr">
                 <label className="cora-label" htmlFor={`f-scale-photo-${line.id}`}>Scale photo</label>
-                <p className="cora-field-hint">Take or choose a clear scale photo, then adjust the crop to help OCR detect the reading.</p>
                 {line.scalePhotoPreviewUrl && (
                   <img className="cora-scale-preview" src={line.scalePhotoPreviewUrl} alt={`Scale photo ${index + 1} preview`} />
                 )}
@@ -4098,13 +4075,6 @@ function App() {
                 </div>
 
                 <div className="cora-card-body">
-                  {loadState === 'loaded' && !submitted && (
-                    <div className="cora-step-context" aria-live="polite">
-                      <span className="cora-step-context-eyebrow">What to complete now</span>
-                      <strong>{STEP_GUIDANCE[step].title}</strong>
-                      <p>{STEP_GUIDANCE[step].body}</p>
-                    </div>
-                  )}
                   {loadState === 'loading' && (
                     <div className="cora-form-grid">
                       {Array.from({ length: 4 }).map((_, i) => (
