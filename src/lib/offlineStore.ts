@@ -244,7 +244,11 @@ export const listQueuedSubmissions = async () => withStore(QUEUE_STORE, 'readonl
 
 export const listPendingQueuedSubmissions = async () => {
   const items = await listQueuedSubmissions()
-  return items.filter((item) => item.status === 'queued' || item.status === 'failed')
+  return items.filter((item) => (
+    item.status === 'queued'
+    || item.status === 'failed'
+    || item.status === 'syncing'
+  ))
 }
 
 export const deleteQueuedSubmission = async (id: string) => withStore(QUEUE_STORE, 'readwrite', async (store) => {
