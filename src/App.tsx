@@ -193,6 +193,30 @@ const getCustomerLevelValue = (row: CustomerAreaOption, levelIndex: number) => {
 const getFormCustomerLevelValue = (form: Form, levelIndex: number) =>
   String(form[CUSTOMER_LEVELS[levelIndex].key] ?? '').trim()
 
+const getCustomerPathValues = (row: CustomerAreaOption) =>
+  CUSTOMER_LEVELS
+    .map((_, levelIndex) => getCustomerLevelValue(row, levelIndex))
+    .filter(Boolean)
+
+const getCustomerPathLabel = (row: CustomerAreaOption) => getCustomerPathValues(row).join(' / ')
+
+const getCustomerPathOptions = (rows: CustomerAreaOption[]) => {
+  const options = new Map<string, { value: string, label: string, row: CustomerAreaOption }>()
+  rows.forEach((row) => {
+    const label = getCustomerPathLabel(row)
+    if (!label) return
+    const key = normalize(label)
+    if (!options.has(key)) options.set(key, { value: label, label, row })
+  })
+  return Array.from(options.values()).sort((a, b) => a.label.localeCompare(b.label))
+}
+
+const getFormCustomerPathValue = (form: Form) =>
+  CUSTOMER_LEVELS
+    .map((level) => String(form[level.key] ?? '').trim())
+    .filter(Boolean)
+    .join(' / ')
+
 const rowMatchesCustomerPath = (row: CustomerAreaOption, form: Form, upToLevelIndex: number) => {
   for (let i = 0; i < upToLevelIndex; i += 1) {
     const selected = getFormCustomerLevelValue(form, i)
@@ -1722,16 +1746,19 @@ function StepBasic({ form, set, busy }: { form: Form; set: <K extends keyof Form
 }
 
 function StepCustomer({
-  form, set, busy, customerAreas, onOpenAdhocModal,
+  form, set, busy, customerAreas,
 }: {
   form: Form
   set: <K extends keyof Form>(k: K, v: Form[K]) => void
   busy: boolean
   customerAreas: CustomerAreaOption[]
-  onOpenAdhocModal: () => void
 }) {
   const levelOptions = CUSTOMER_LEVELS.map((_, levelIndex) => getCustomerLevelOptions(customerAreas, form, levelIndex))
+  const customerPathOptions = getCustomerPathOptions(customerAreas)
   const visibleLevels = CUSTOMER_LEVELS.filter((_, levelIndex) => levelIndex === 0 || levelOptions[levelIndex].length > 0)
+  const selectedCustomerPath = customerPathOptions.some((option) => option.value === getFormCustomerPathValue(form))
+    ? getFormCustomerPathValue(form)
+    : ''
 
   const chooseLevel = (levelIndex: number, value: string) => {
     const level = CUSTOMER_LEVELS[levelIndex]
@@ -1745,6 +1772,16 @@ function StepCustomer({
     })
   }
 
+  const chooseCustomerPath = (value: string) => {
+    const option = customerPathOptions.find((item) => item.value === value)
+    if (!option) return
+    CUSTOMER_LEVELS.forEach((level, levelIndex) => {
+      set(level.key, getCustomerLevelValue(option.row, levelIndex))
+    })
+    set('Customer', getCustomerName(option.row))
+    set('IsAdhocCustomer', false)
+  }
+
   return (
     <div className="cora-form-grid" key="step-customer">
       <div className="cora-section-divider"><span>Customer Details</span></div>
@@ -1755,6 +1792,23 @@ function StepCustomer({
       </div>
       {visibleLevels.map((level) => {
         const levelIndex = CUSTOMER_LEVELS.indexOf(level)
+        if (levelIndex === 0) {
+          return (
+            <div className="cora-field" key={level.key}>
+              <label className="cora-label" htmlFor="f-customer-level-1">{level.label}</label>
+              <CustomSelect
+                id="f-customer-level-1"
+                value={selectedCustomerPath}
+                onChange={chooseCustomerPath}
+                disabled={busy}
+                placeholder={level.placeholder}
+                searchable
+                searchPlaceholder="Search any customer level..."
+                options={customerPathOptions.map((option) => ({ value: option.value, label: option.label }))}
+              />
+            </div>
+          )
+        }
         const options = levelOptions[levelIndex]
         const selectedValue = options.includes(form[level.key]) ? form[level.key] : ''
         return (
@@ -1773,131 +1827,6 @@ function StepCustomer({
           </div>
         )
       })}
-      <div className="cora-field">
-        <label className="cora-label">Ad-hoc Customer</label>
-        <div className="cora-switch-row">
-          <div
-            className={`cora-switch ${form.IsAdhocCustomer ? 'on' : ''}`}
-            role="switch" aria-checked={form.IsAdhocCustomer} tabIndex={0}
-            onClick={() => {
-              if (busy) return
-              if (form.IsAdhocCustomer) {
-                set('IsAdhocCustomer', false)
-                return
-              }
-              onOpenAdhocModal()
-            }}
-            onKeyDown={(e) => {
-              if (busy || (e.key !== ' ' && e.key !== 'Enter')) return
-              e.preventDefault()
-              if (form.IsAdhocCustomer) {
-                set('IsAdhocCustomer', false)
-                return
-              }
-              onOpenAdhocModal()
-            }}
-            id="switch-adhoc"
-          />
-          <span className="cora-switch-label">{form.IsAdhocCustomer ? 'Yes' : 'No'}</span>
-        </div>
-        <p className="cora-field-hint">Use this only when the customer does not exist in the reference list yet.</p>
-      </div>
-    </div>
-  )
-}
-
-function AdhocCustomerModal({
-  initialValues, onCancel, onSave, busy,
-}: {
-  initialValues: Pick<Form, 'CustomerName' | 'CustomerLocation' | 'CustomerTenant'>
-  onCancel: () => void
-  onSave: (values: Pick<Form, 'CustomerName' | 'CustomerLocation' | 'CustomerTenant'>) => void
-  busy: boolean
-}) {
-  const [values, setValues] = useState(initialValues)
-  const customerName = values.CustomerName.trim()
-  const canSave = Boolean(customerName)
-
-  useEffect(() => {
-    setValues(initialValues)
-  }, [initialValues])
-
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onCancel()
-    }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [onCancel])
-
-  const update = (field: keyof typeof values, value: string) => {
-    setValues((current) => ({ ...current, [field]: value }))
-  }
-
-  const save = () => {
-    if (!canSave) return
-    onSave({
-      CustomerName: customerName,
-      CustomerLocation: values.CustomerLocation.trim(),
-      CustomerTenant: values.CustomerTenant.trim(),
-    })
-  }
-
-  return (
-    <div className="cora-modal-backdrop" role="presentation" onMouseDown={onCancel}>
-      <div className="cora-modal" role="dialog" aria-modal="true" aria-labelledby="adhoc-customer-title" onMouseDown={(event) => event.stopPropagation()}>
-        <div className="cora-modal-head">
-          <div>
-            <h2 id="adhoc-customer-title">Ad-hoc Customer Setup</h2>
-            <p>Enter the custom customer information for this special order.</p>
-          </div>
-          <button className="cora-modal-close" type="button" onClick={onCancel} aria-label="Close ad-hoc customer details">
-            {I.x}
-          </button>
-        </div>
-        <div className="cora-modal-body">
-          <div className="cora-floating-field">
-            <input
-              id="adhoc-customer-name"
-              className="cora-floating-input"
-              placeholder=" "
-              value={values.CustomerName}
-              onChange={(event) => update('CustomerName', event.target.value)}
-              autoFocus
-              disabled={busy}
-            />
-            <label className="cora-floating-label" htmlFor="adhoc-customer-name">Customer Name *</label>
-          </div>
-          <div className="cora-floating-field">
-            <input
-              id="adhoc-customer-location"
-              className="cora-floating-input"
-              placeholder=" "
-              value={values.CustomerLocation}
-              onChange={(event) => update('CustomerLocation', event.target.value)}
-              disabled={busy}
-            />
-            <label className="cora-floating-label" htmlFor="adhoc-customer-location">Location / Building</label>
-          </div>
-          <div className="cora-floating-field">
-            <input
-              id="adhoc-customer-tenant"
-              className="cora-floating-input"
-              placeholder=" "
-              value={values.CustomerTenant}
-              onChange={(event) => update('CustomerTenant', event.target.value)}
-              disabled={busy}
-            />
-            <label className="cora-floating-label" htmlFor="adhoc-customer-tenant">Sub-location / Tower</label>
-          </div>
-        </div>
-        <div className="cora-modal-foot">
-          <button className="cora-btn cora-btn-outline" type="button" onClick={onCancel} disabled={busy}>Cancel</button>
-          <button className="cora-btn cora-btn-primary" type="button" onClick={save} disabled={busy || !canSave}>
-            Confirm Customer
-          </button>
-        </div>
-      </div>
     </div>
   )
 }
@@ -2969,7 +2898,6 @@ function StepReview({
     ['Title', form.Title || '—'],
     ['Collection Date', form.DateOfCollection || '—'],
     ...customerLevelRows,
-    ['Ad-hoc', form.IsAdhocCustomer ? 'Yes' : 'No'],
     ['Driver', form.DriverName || '—'],
     ['Vehicle', form.VehicleNumber || '—'],
     ['Waste Items', completeWasteLines.length > 0 ? String(completeWasteLines.length) : '—'],
@@ -3082,7 +3010,6 @@ function App() {
   const [submitted, setSubmitted] = useState(false)
   const [submissionMode, setSubmissionMode] = useState<SubmissionMode>('draft')
   const [toast, setToast] = useState<Toast | null>(null)
-  const [adhocModalOpen, setAdhocModalOpen] = useState(false)
   const [resetModalOpen, setResetModalOpen] = useState(false)
   const [signatureDataUrl, setSignatureDataUrl] = useState('')
   const [beforePhotoFile, setBeforePhotoFile] = useState<File | null>(null)
@@ -3373,7 +3300,6 @@ function App() {
     setSignatureDataUrl('')
     setBeforePhotoFile(null)
     setAfterPhotoFile(null)
-    setAdhocModalOpen(false)
     setStep(0)
     setSubmitted(false)
     setSubmissionMode('draft')
@@ -3410,7 +3336,6 @@ function App() {
         CustomerLevel10: '',
         IsAdhocCustomer: false,
       }))
-      setAdhocModalOpen(false)
       setToast({ type: 'success', text: 'Customer fields cleared.' })
       return
     }
@@ -3735,25 +3660,6 @@ function App() {
       setToast({ type: 'error', text: error instanceof Error ? error.message : 'Could not delete the customer.' })
     }
   }, [customerAreas, persistReferenceCache, showUndoToast])
-
-  const saveAdhocCustomer = useCallback((values: Pick<Form, 'CustomerName' | 'CustomerLocation' | 'CustomerTenant'>) => {
-    setForm((current) => ({
-      ...current,
-      Customer: '',
-      CustomerName: values.CustomerName,
-      CustomerLocation: values.CustomerLocation,
-      CustomerTenant: values.CustomerTenant,
-      CustomerLevel4: '',
-      CustomerLevel5: '',
-      CustomerLevel6: '',
-      CustomerLevel7: '',
-      CustomerLevel8: '',
-      CustomerLevel9: '',
-      CustomerLevel10: '',
-      IsAdhocCustomer: true,
-    }))
-    setAdhocModalOpen(false)
-  }, [])
 
   const getCustomerStepIssue = () => {
     const customerName = form.CustomerName.trim()
@@ -4105,7 +4011,6 @@ function App() {
                           set={set}
                           busy={submitting}
                           customerAreas={customerAreas}
-                          onOpenAdhocModal={() => setAdhocModalOpen(true)}
                         />
                       )}
                       {step === 2 && (
@@ -4229,18 +4134,6 @@ function App() {
             setResetModalOpen(false)
             reset()
           }}
-        />
-      )}
-      {adhocModalOpen && (
-        <AdhocCustomerModal
-          initialValues={{
-            CustomerName: form.CustomerName,
-            CustomerLocation: form.CustomerLocation,
-            CustomerTenant: form.CustomerTenant,
-          }}
-          onCancel={() => setAdhocModalOpen(false)}
-          onSave={saveAdhocCustomer}
-          busy={submitting}
         />
       )}
     </div>

@@ -1,4 +1,5 @@
 import { render, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const getContext = vi.fn()
@@ -72,6 +73,7 @@ describe('App', () => {
   beforeEach(() => {
     vi.resetModules()
     vi.clearAllMocks()
+    HTMLElement.prototype.scrollIntoView = vi.fn()
 
     getContext.mockResolvedValue({ user: { userPrincipalName: 'operator@cora-environment.com' } })
     customersGetAll.mockResolvedValue({ data: [{ ID: 1, Title: 'Acme', field_1: 'HQ', field_2: 'Tower A' }] })
@@ -126,5 +128,59 @@ describe('App', () => {
       expect(screen.getByText(/Using cached reference data/)).toBeInTheDocument()
     })
     expect(screen.queryByText('Reference Data Unavailable')).not.toBeInTheDocument()
+  })
+
+  it('searches customer hierarchy paths and fills all customer fields from the selected row', async () => {
+    const user = userEvent.setup()
+    customersGetAll.mockResolvedValue({
+      data: [
+        { ID: 1, Title: 'Acme', field_1: 'HQ', field_2: 'Tower A' },
+        {
+          ID: 2,
+          Title: 'Beta',
+          field_1: 'Plant',
+          field_2: 'Zone B',
+          field_3: 'Lab',
+          field_4: 'Cold Room',
+          field_5: 'Dock 9',
+        },
+        {
+          ID: 3,
+          Title: 'Beta',
+          field_1: 'Plant',
+          field_2: 'Zone B',
+          field_3: 'Lab',
+          field_4: 'Cold Room',
+          field_5: 'Dock 9',
+        },
+        {
+          ID: 4,
+          Title: 'Beta',
+          field_1: 'Warehouse',
+          field_2: 'Zone C',
+        },
+      ],
+    })
+    const { default: App } = await import('./App')
+
+    render(<App />)
+
+    await user.click(await screen.findByRole('button', { name: /Continue to Customer/i }))
+    await user.click(screen.getByRole('combobox', { name: 'Customer' }))
+    await user.type(screen.getByRole('textbox', { name: 'Search any customer level...' }), 'Dock 9')
+
+    const fullPath = 'Beta / Plant / Zone B / Lab / Cold Room / Dock 9'
+    expect(screen.getAllByRole('option', { name: fullPath })).toHaveLength(1)
+    await user.click(screen.getByRole('option', { name: fullPath }))
+
+    expect(screen.getByRole('combobox', { name: 'Customer' })).toHaveTextContent(fullPath)
+    expect(screen.getByRole('combobox', { name: 'Location' })).toHaveTextContent('Plant')
+    expect(screen.getByRole('combobox', { name: 'Sub-location' })).toHaveTextContent('Zone B')
+    expect(screen.getByRole('combobox', { name: 'Level 4' })).toHaveTextContent('Lab')
+    expect(screen.getByRole('combobox', { name: 'Level 5' })).toHaveTextContent('Cold Room')
+    expect(screen.getByRole('combobox', { name: 'Level 6' })).toHaveTextContent('Dock 9')
+
+    await user.click(screen.getByRole('combobox', { name: 'Location' }))
+    expect(screen.getByRole('option', { name: 'Warehouse' })).toBeInTheDocument()
   })
 })

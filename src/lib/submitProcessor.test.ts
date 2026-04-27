@@ -219,7 +219,6 @@ describe('submitProcessor', () => {
     try {
       const title = 'SO-PROOF-POLL-001'
       const beforeBlob = new Blob(['before-bytes'], { type: 'image/jpeg' })
-      const afterBlob = new Blob(['after-bytes'], { type: 'image/jpeg' })
       const queuedSubmission = makeQueuedSubmission({
         payload: makeSubmissionPayload({
           form: makePersistedForm({
