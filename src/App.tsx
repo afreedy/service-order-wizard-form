@@ -6,6 +6,7 @@
 
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import type { ChangeEvent, DragEvent, PointerEvent as ReactPointerEvent, ReactNode } from 'react'
+import { useCombobox } from 'downshift'
 import { getContext } from '@microsoft/power-apps/app'
 import type { Drivers1Read } from './generated/models/Drivers1Model'
 import type { Customer_area_data_clean_finalRead, Customer_area_data_clean_finalWrite } from './generated/models/Customer_area_data_clean_finalModel'
@@ -124,6 +125,34 @@ const ADMIN_PASSCODE = 'CORA2026'
 const ADMIN_UNLOCK_STORAGE_KEY = 'cora-admin-unlocked'
 
 const normalize = (value: string) => value.trim().toLowerCase()
+const normalizeAutocompleteText = (value: string) =>
+  value
+    .trim()
+    .toLowerCase()
+    .replace(/[/\\|,;:_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+
+const filterAutocompleteOptions = <T,>(
+  options: T[],
+  query: string,
+  getLabel: (option: T) => string,
+  limit?: number,
+) => {
+  const normalizedQuery = normalizeAutocompleteText(query)
+  const ranked = options
+    .map((option, index) => {
+      const normalizedLabel = normalizeAutocompleteText(getLabel(option))
+      if (!normalizedQuery) return { option, index, rank: 0 }
+      if (normalizedLabel.startsWith(normalizedQuery)) return { option, index, rank: 0 }
+      if (normalizedLabel.includes(normalizedQuery)) return { option, index, rank: 1 }
+      return null
+    })
+    .filter((item): item is { option: T, index: number, rank: number } => Boolean(item))
+    .sort((a, b) => a.rank - b.rank || a.index - b.index)
+    .map((item) => item.option)
+
+  return typeof limit === 'number' ? ranked.slice(0, limit) : ranked
+}
 
 const getDriverName = (row: DriverOptionSource) => {
   const dynamicRow = row as Record<string, unknown>
@@ -506,171 +535,204 @@ function CustomSelect({
 }) {
   const [isOpen, setIsOpen] = useState(false)
   const [searchTerm, setSearchTerm] = useState('')
-  const [activeIndex, setActiveIndex] = useState(-1)
   const containerRef = useRef<HTMLDivElement>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
-  const optionRefs = useRef<(HTMLButtonElement | null)[]>([])
   const listboxId = `${id}-listbox`
-
-  useEffect(() => {
-    const handleClickOutside = (event: globalThis.PointerEvent) => {
-      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
-        setIsOpen(false)
-        setSearchTerm('')
-        setActiveIndex(-1)
-      }
-    }
-    document.addEventListener('pointerdown', handleClickOutside)
-    return () => document.removeEventListener('pointerdown', handleClickOutside)
-  }, [])
-
   const selectedOption = options.find(o => o.value === value)
-  const normalizedSearch = searchTerm.trim().toLowerCase()
-  const filteredOptions = normalizedSearch
-    ? options.filter((option) => option.label.toLowerCase().includes(normalizedSearch))
+  const filteredOptions = searchable
+    ? filterAutocompleteOptions(options, searchTerm, (option) => option.label)
     : options
-  const getInitialActiveIndex = useCallback((nextOptions: { value: string, label: string }[]) => {
-    if (nextOptions.length === 0) return -1
-    const nextSelectedIndex = nextOptions.findIndex((option) => option.value === value)
-    return nextSelectedIndex >= 0 ? nextSelectedIndex : 0
-  }, [value])
+  const initialHighlightedIndex = Math.max(
+    0,
+    filteredOptions.findIndex((option) => option.value === value),
+  )
+
+  const {
+    highlightedIndex,
+    getInputProps,
+    getItemProps,
+    getMenuProps,
+    setHighlightedIndex,
+  } = useCombobox({
+    id,
+    items: filteredOptions,
+    itemToString: (item) => item?.label ?? '',
+    inputValue: searchTerm,
+    selectedItem: selectedOption ?? null,
+    initialHighlightedIndex,
+    isItemDisabled: () => Boolean(disabled),
+    onInputValueChange: ({ inputValue }) => {
+      setSearchTerm(inputValue ?? '')
+      setHighlightedIndex(0)
+    },
+    onSelectedItemChange: ({ selectedItem }) => {
+      if (!selectedItem) return
+      onChange(selectedItem.value)
+      setSearchTerm('')
+      setIsOpen(false)
+      window.setTimeout(() => triggerRef.current?.focus(), 0)
+    },
+  })
 
   useEffect(() => {
     if (!isOpen) return
     window.setTimeout(() => {
       if (searchable) {
         searchInputRef.current?.focus()
-        return
       }
-      if (activeIndex >= 0) optionRefs.current[activeIndex]?.focus()
     }, 0)
-  }, [activeIndex, isOpen, searchable])
+  }, [isOpen, searchable])
 
-  useEffect(() => {
-    if (!isOpen || activeIndex < 0) return
-    optionRefs.current[activeIndex]?.scrollIntoView({ block: 'nearest' })
-  }, [activeIndex, isOpen])
-
-  const closeMenu = useCallback((returnFocus = false) => {
+  const resetAndCloseMenu = useCallback((returnFocus = false) => {
     setIsOpen(false)
     setSearchTerm('')
-    setActiveIndex(-1)
     if (returnFocus) window.setTimeout(() => triggerRef.current?.focus(), 0)
   }, [])
 
-  const selectOption = useCallback((nextValue: string) => {
-    onChange(nextValue)
-    closeMenu(true)
-  }, [closeMenu, onChange])
-
-  const openMenu = useCallback(() => {
+  const openSelectMenu = useCallback(() => {
     if (disabled) return
-    setActiveIndex(getInitialActiveIndex(filteredOptions))
+    setSearchTerm('')
     setIsOpen(true)
-  }, [disabled, filteredOptions, getInitialActiveIndex])
+    window.setTimeout(() => {
+      setHighlightedIndex(initialHighlightedIndex)
+    }, 0)
+  }, [disabled, initialHighlightedIndex, setHighlightedIndex])
 
-  const handleSearchChange = (nextSearchTerm: string) => {
-    const nextNormalizedSearch = nextSearchTerm.trim().toLowerCase()
-    const nextFilteredOptions = nextNormalizedSearch
-      ? options.filter((option) => option.label.toLowerCase().includes(nextNormalizedSearch))
-      : options
-    setSearchTerm(nextSearchTerm)
-    setActiveIndex(getInitialActiveIndex(nextFilteredOptions))
-  }
-
-  const moveActiveIndex = useCallback((direction: 1 | -1) => {
-    if (!filteredOptions.length) return
-    setActiveIndex((current) => {
-      if (current < 0) return direction === 1 ? 0 : filteredOptions.length - 1
-      const nextIndex = current + direction
-      if (nextIndex < 0) return filteredOptions.length - 1
-      if (nextIndex >= filteredOptions.length) return 0
-      return nextIndex
-    })
-  }, [filteredOptions.length])
+  const selectOption = useCallback((nextOption: { value: string, label: string }) => {
+    onChange(nextOption.value)
+    resetAndCloseMenu(true)
+  }, [onChange, resetAndCloseMenu])
 
   const handleTriggerKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>) => {
     if (disabled) return
     if (event.key === 'ArrowDown') {
       event.preventDefault()
       if (!isOpen) {
-        openMenu()
+        openSelectMenu()
         return
       }
-      moveActiveIndex(1)
+      setHighlightedIndex((highlightedIndex + 1) % Math.max(filteredOptions.length, 1))
       return
     }
     if (event.key === 'ArrowUp') {
       event.preventDefault()
       if (!isOpen) {
-        openMenu()
+        openSelectMenu()
         return
       }
-      moveActiveIndex(-1)
+      setHighlightedIndex(highlightedIndex <= 0 ? filteredOptions.length - 1 : highlightedIndex - 1)
       return
     }
     if (event.key === 'Home' && isOpen) {
       event.preventDefault()
-      setActiveIndex(filteredOptions.length > 0 ? 0 : -1)
+      setHighlightedIndex(filteredOptions.length > 0 ? 0 : -1)
       return
     }
     if (event.key === 'End' && isOpen) {
       event.preventDefault()
-      setActiveIndex(filteredOptions.length > 0 ? filteredOptions.length - 1 : -1)
+      setHighlightedIndex(filteredOptions.length > 0 ? filteredOptions.length - 1 : -1)
       return
     }
     if (event.key === 'Enter' || event.key === ' ') {
       event.preventDefault()
       if (!isOpen) {
-        openMenu()
+        openSelectMenu()
         return
       }
-      if (activeIndex >= 0 && filteredOptions[activeIndex]) {
-        selectOption(filteredOptions[activeIndex].value)
+      if (highlightedIndex >= 0 && filteredOptions[highlightedIndex]) {
+        selectOption(filteredOptions[highlightedIndex])
       }
       return
     }
     if (event.key === 'Escape' && isOpen) {
       event.preventDefault()
-      closeMenu(true)
+      resetAndCloseMenu(true)
     }
   }
 
   const handleSearchKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
     if (event.key === 'ArrowDown') {
       event.preventDefault()
-      moveActiveIndex(1)
+      setHighlightedIndex((highlightedIndex + 1) % Math.max(filteredOptions.length, 1))
       return
     }
     if (event.key === 'ArrowUp') {
       event.preventDefault()
-      moveActiveIndex(-1)
+      setHighlightedIndex(highlightedIndex <= 0 ? filteredOptions.length - 1 : highlightedIndex - 1)
       return
     }
     if (event.key === 'Home') {
       event.preventDefault()
-      setActiveIndex(filteredOptions.length > 0 ? 0 : -1)
+      setHighlightedIndex(filteredOptions.length > 0 ? 0 : -1)
       return
     }
     if (event.key === 'End') {
       event.preventDefault()
-      setActiveIndex(filteredOptions.length > 0 ? filteredOptions.length - 1 : -1)
-      return
-    }
-    if (event.key === 'Enter' && activeIndex >= 0 && filteredOptions[activeIndex]) {
-      event.preventDefault()
-      selectOption(filteredOptions[activeIndex].value)
+      setHighlightedIndex(filteredOptions.length > 0 ? filteredOptions.length - 1 : -1)
       return
     }
     if (event.key === 'Escape') {
       event.preventDefault()
-      closeMenu(true)
+      resetAndCloseMenu(true)
+      return
+    }
+    if (event.key === 'Enter' && highlightedIndex >= 0 && filteredOptions[highlightedIndex]) {
+      event.preventDefault()
+      selectOption(filteredOptions[highlightedIndex])
       return
     }
     if (event.key === 'Tab') {
-      closeMenu(false)
+      resetAndCloseMenu(false)
     }
+  }
+  const menuProps = getMenuProps({ className: 'cora-custom-select-menu', id: listboxId, 'aria-labelledby': id }, { suppressRefError: true })
+  // Downshift getter returns ref wiring for ARIA bookkeeping; the input also keeps a local ref for focus management.
+  // eslint-disable-next-line react-hooks/refs
+  const searchInputProps = getInputProps({
+    onKeyDown: handleSearchKeyDown,
+    disabled,
+    className: 'cora-custom-select-search',
+    placeholder: searchPlaceholder ?? 'Search options...',
+    'aria-label': searchPlaceholder ?? 'Search options',
+    'aria-controls': listboxId,
+    'aria-activedescendant': highlightedIndex >= 0 ? `${id}-option-${highlightedIndex}` : undefined,
+    onChange: (event) => {
+      setSearchTerm(event.currentTarget.value)
+      setHighlightedIndex(0)
+      setIsOpen(true)
+    },
+  }, { suppressRefError: true })
+  const renderOption = (opt: { value: string, label: string }, index: number) => {
+    const itemProps = getItemProps({
+      item: opt,
+      index,
+      onMouseEnter: () => setHighlightedIndex(index),
+    })
+
+    return (
+      <li key={opt.value} role="presentation">
+        <button
+          {...itemProps}
+          id={`${id}-option-${index}`}
+          type="button"
+          role="option"
+          aria-selected={value === opt.value}
+          tabIndex={-1}
+          className={`cora-custom-select-option ${value === opt.value ? 'selected' : ''} ${index === highlightedIndex ? 'active' : ''}`}
+          onMouseDown={(event) => {
+            event.preventDefault()
+            selectOption(opt)
+          }}
+          onClick={(event) => {
+            event.preventDefault()
+            selectOption(opt)
+          }}
+        >
+          {opt.label}
+        </button>
+      </li>
+    )
   }
 
   return (
@@ -680,19 +742,20 @@ function CustomSelect({
         type="button"
         id={id}
         className={`cora-custom-select-trigger ${!selectedOption && placeholder ? 'placeholder' : ''}`}
+        disabled={disabled}
         onClick={() => {
           if (isOpen) {
-            closeMenu(true)
+            resetAndCloseMenu(true)
             return
           }
-          openMenu()
+          openSelectMenu()
         }}
         onKeyDown={handleTriggerKeyDown}
         role="combobox"
         aria-haspopup="listbox"
         aria-expanded={isOpen}
         aria-controls={listboxId}
-        aria-activedescendant={isOpen && activeIndex >= 0 ? `${id}-option-${activeIndex}` : undefined}
+        aria-activedescendant={isOpen && highlightedIndex >= 0 ? `${id}-option-${highlightedIndex}` : undefined}
       >
         <span className="cora-custom-select-value">
           {selectedOption ? selectedOption.label : (placeholder || 'Select...')}
@@ -702,44 +765,109 @@ function CustomSelect({
         </svg>
       </button>
       {isOpen && (
-        <ul className="cora-custom-select-menu" role="listbox" id={listboxId} aria-labelledby={id}>
+        <ul {...menuProps}>
           {searchable && (
             <li className="cora-custom-select-search-wrap">
               <input
+                {...searchInputProps}
                 ref={searchInputRef}
-                className="cora-custom-select-search"
                 value={searchTerm}
-                onChange={(event) => handleSearchChange(event.target.value)}
+                onChange={(event) => {
+                  setSearchTerm(event.currentTarget.value)
+                  setHighlightedIndex(0)
+                  setIsOpen(true)
+                }}
                 onKeyDown={handleSearchKeyDown}
-                placeholder={searchPlaceholder ?? 'Search options...'}
-                aria-label={searchPlaceholder ?? 'Search options'}
-                aria-controls={listboxId}
-                aria-activedescendant={activeIndex >= 0 ? `${id}-option-${activeIndex}` : undefined}
               />
             </li>
           )}
           {filteredOptions.length === 0 && <li className="cora-custom-select-empty">No matching options</li>}
-          {filteredOptions.map((opt, index) => (
-            <li key={opt.value} role="presentation">
-              <button
-                ref={(element) => {
-                  optionRefs.current[index] = element
-                }}
-                id={`${id}-option-${index}`}
-                type="button"
-                role="option"
-                aria-selected={value === opt.value}
-                tabIndex={searchable ? -1 : index === activeIndex ? 0 : -1}
-                className={`cora-custom-select-option ${value === opt.value ? 'selected' : ''} ${index === activeIndex ? 'active' : ''}`}
-                onMouseEnter={() => setActiveIndex(index)}
-                onClick={() => selectOption(opt.value)}
-              >
-                {opt.label}
-              </button>
-            </li>
-          ))}
+          {filteredOptions.map(renderOption)}
         </ul>
       )}
+    </div>
+  )
+}
+
+function AutocompleteSearchInput({
+  value,
+  onChange,
+  suggestions,
+  placeholder,
+  ariaLabel,
+  disabled,
+}: {
+  value: string
+  onChange: (value: string) => void
+  suggestions: string[]
+  placeholder: string
+  ariaLabel: string
+  disabled?: boolean
+}) {
+  const uniqueSuggestions = useMemo(() => uniqueValues(suggestions), [suggestions])
+  const filteredSuggestions = useMemo(
+    () => filterAutocompleteOptions(uniqueSuggestions, value, (suggestion) => suggestion, 8),
+    [uniqueSuggestions, value],
+  )
+  const {
+    isOpen,
+    highlightedIndex,
+    getInputProps,
+    getItemProps,
+    getMenuProps,
+    openMenu,
+    closeMenu,
+  } = useCombobox({
+    items: filteredSuggestions,
+    itemToString: (item) => item ?? '',
+    inputValue: value,
+    selectedItem: null,
+    onInputValueChange: ({ inputValue, type }) => {
+      if (type === useCombobox.stateChangeTypes.InputBlur) return
+      onChange(inputValue ?? '')
+    },
+    onSelectedItemChange: ({ selectedItem }) => {
+      if (selectedItem) onChange(selectedItem)
+    },
+  })
+
+  const showSuggestions = isOpen && filteredSuggestions.length > 0
+
+  return (
+    <div className={`cora-table-search-wrap cora-autocomplete-search ${showSuggestions ? 'open' : ''}`}>
+      <svg className="cora-table-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
+      </svg>
+      <input
+        {...getInputProps({
+          className: 'cora-table-search',
+          placeholder,
+          'aria-label': ariaLabel,
+          disabled,
+          onFocus: () => openMenu(),
+          onKeyDown: (event) => {
+            if (event.key === 'Escape') closeMenu()
+          },
+        })}
+      />
+      {value && (
+        <button className="cora-table-search-clear" type="button" onClick={() => onChange('')} aria-label={`Clear ${ariaLabel.toLowerCase()}`}>
+          {I.x}
+        </button>
+      )}
+      <ul {...getMenuProps({ className: 'cora-autocomplete-menu' })}>
+        {showSuggestions && filteredSuggestions.map((suggestion, index) => (
+          <li key={`${suggestion}-${index}`}>
+            <button
+              {...getItemProps({ item: suggestion, index })}
+              className={`cora-autocomplete-option ${index === highlightedIndex ? 'active' : ''}`}
+              type="button"
+            >
+              {suggestion}
+            </button>
+          </li>
+        ))}
+      </ul>
     </div>
   )
 }
@@ -1113,7 +1241,11 @@ function OrdersTable({ orders, loadState }: { orders: ServiceOrdersRead[]; loadS
   const hasSearch = Boolean(normalizedSearch)
   const hasDateFilter = Boolean(selectedDate)
   const filtered = orders.filter((o) => {
-    const matchesSearch = !hasSearch || cols.some((c) => String(o[c] ?? '').toLowerCase().includes(normalizedSearch))
+    const orderSearchValues = [
+      ...cols.map((c) => String(o[c] ?? '')),
+      String(o.DateOfCollection ?? '').slice(0, 10).split('-').reverse().join('/'),
+    ]
+    const matchesSearch = !hasSearch || orderSearchValues.some((item) => normalizeAutocompleteText(item).includes(normalizeAutocompleteText(normalizedSearch)))
     const matchesDate = !hasDateFilter || String(o.DateOfCollection ?? '').slice(0, 10) === selectedDate
     return matchesSearch && matchesDate
   })
@@ -1124,6 +1256,13 @@ function OrdersTable({ orders, loadState }: { orders: ServiceOrdersRead[]; loadS
     if (!y || !m || !d) return ''
     return `${d}/${m}/${y}`
   }
+  const searchSuggestions = uniqueValues(orders.flatMap((order) => [
+    String(order.Title ?? '').trim(),
+    String(order.CustomerName ?? '').trim(),
+    String(order.DriverName ?? '').trim(),
+    String(order.VehicleNumber ?? '').trim(),
+    formatDateDisplay(String(order.DateOfCollection ?? '').slice(0, 10)),
+  ]))
 
   const activeFilterLabel = [
     hasSearch ? 'search' : '',
@@ -1152,23 +1291,13 @@ function OrdersTable({ orders, loadState }: { orders: ServiceOrdersRead[]; loadS
 
       {loadState === 'loaded' && orders.length > 0 && (
         <div className="cora-table-toolbar">
-          <div className="cora-table-search-wrap">
-            <svg className="cora-table-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
-            </svg>
-            <input
-              className="cora-table-search"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search orders..."
-              aria-label="Search orders"
-            />
-            {search && (
-              <button className="cora-table-search-clear" onClick={() => setSearch('')} aria-label="Clear search">
-                {I.x}
-              </button>
-            )}
-          </div>
+          <AutocompleteSearchInput
+            value={search}
+            onChange={setSearch}
+            suggestions={searchSuggestions}
+            placeholder="Search orders..."
+            ariaLabel="Search orders"
+          />
           <div className="cora-table-date-filter">
             <CustomDatePicker
               id="orders-date-filter"
@@ -1374,7 +1503,11 @@ function AdminReferencePage({
   const filteredCustomers = customerItems.filter((item) => {
     if (!normalizedCustomerSearch) return true
     const haystack = `${getCustomerName(item)} ${getCustomerAdminSummary(item)}`.toLowerCase()
-    return haystack.includes(normalizedCustomerSearch)
+    return normalizeAutocompleteText(haystack).includes(normalizeAutocompleteText(normalizedCustomerSearch))
+  })
+  const customerSearchSuggestions = customerItems.map((item) => {
+    const summary = getCustomerAdminSummary(item)
+    return summary ? `${getCustomerName(item)} / ${summary}` : getCustomerName(item)
   })
 
   const openCustomerModal = (mode: 'create' | 'edit', item?: CustomerAreaOption & { ID: number }) => {
@@ -1495,24 +1628,14 @@ function AdminReferencePage({
                 <p className="cora-field-hint">Use search to find customers quickly. Open the customer editor to add or update the hierarchy fields that drive the order form.</p>
               </div>
               <div className="cora-admin-toolbar">
-                <div className="cora-table-search-wrap">
-                  <svg className="cora-table-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
-                  </svg>
-                  <input
-                    className="cora-table-search"
-                    value={customerSearch}
-                    onChange={(event) => setCustomerSearch(event.target.value)}
-                    placeholder="Search customers or locations..."
-                    aria-label="Search customers"
-                    disabled={busy || Boolean(busyItem)}
-                  />
-                  {customerSearch && (
-                    <button className="cora-table-search-clear" type="button" onClick={() => setCustomerSearch('')} aria-label="Clear customer search">
-                      {I.x}
-                    </button>
-                  )}
-                </div>
+                <AutocompleteSearchInput
+                  value={customerSearch}
+                  onChange={setCustomerSearch}
+                  suggestions={customerSearchSuggestions}
+                  placeholder="Search customers or locations..."
+                  ariaLabel="Search customers"
+                  disabled={busy || Boolean(busyItem)}
+                />
                 <div className="cora-admin-toolbar-actions">
                   <span className="cora-table-filter-badge">{filteredCustomers.length} of {customerItems.length} shown</span>
                   <button
