@@ -63,8 +63,8 @@
   --dur-slow: 400ms;
 
   /* Fonts */
-  --f-display: "Geist Mono", ui-monospace, SFMono-Regular, "Roboto Mono", Menlo, Monaco, "Liberation Mono", "DejaVu Sans Mono", "Courier New", monospace;
-  --f-body: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --f-display: Consolas, "Courier New", "Lucida Console", Monaco, monospace;
+  --f-body: "Segoe UI", Arial, Helvetica, sans-serif;
 }
 
 /* ═══ App shell ═══ */

@@ -13,7 +13,6 @@
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
-    "@fontsource/geist-mono": "^5.2.7",
     "@microsoft/power-apps": "^1.0.3",
     "downshift": "^9.3.2",
     "react": "^19.2.0",
