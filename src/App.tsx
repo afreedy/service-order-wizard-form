@@ -24,7 +24,7 @@ import type { CachedReferenceData, Form, PersistedDraft, PersistedForm, Persiste
 import { clearDraft, fromStoredMediaFile, getQueueSummary, loadDraft, saveDraft, toStoredMediaFile } from './lib/offlineStore'
 import { createClientSubmissionId, enqueueSubmission, processPendingQueue } from './lib/offlineQueue'
 import { readCachedReferenceData, writeCachedReferenceData } from './lib/referenceCache'
-import logoImage from './assets/logo.png?inline'
+import logoImage from './assets/cora-logo.svg?inline'
 import './App.css'
 
 /* ═══════════════════════════════════════════════════════
