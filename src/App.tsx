@@ -58,10 +58,44 @@ const I = {
    Types
    ═══════════════════════════════════════════════════════ */
 type Load = 'loading' | 'loaded' | 'error'
-type View = 'form' | 'list' | 'admin'
+type View = 'form' | 'snf' | 'list' | 'admin'
 type AdminTab = 'customers' | 'drivers' | 'vehicles' | 'waste'
 type ProtectedDestination = { view: 'list' } | { view: 'admin'; tab: AdminTab }
 type SubmissionMode = 'draft' | 'queued'
+type SnfStatus =
+  | 'Submitted'
+  | 'Pending HOD Approval'
+  | 'HOD Approved'
+  | 'Rejected'
+  | 'Pending BD-Ops Acknowledgement'
+  | 'BD-Ops Acknowledged'
+  | 'Customer Added'
+  | 'Flow Failed'
+  | 'Cancelled'
+
+type SnfForm = {
+  ContractNo: string
+  Customer: string
+  ServiceAddress: string
+  ServiceDetails: string
+  ContractStartDate: string
+  ContractEndDate: string
+  ApprovalRoute: string
+  CreatedByName: string
+  CreatedByEmail: string
+}
+
+type SnfRequest = SnfForm & {
+  ID: number
+  Title: string
+  Status: SnfStatus
+  HodDecision: '' | 'Approved' | 'Rejected'
+  HodComments: string
+  BdOpsAcknowledgedBy: string
+  BdOpsNotes: string
+  CustomerListItemId?: number
+  LastFlowError: string
+}
 
 interface Toast {
   type: 'success' | 'error'
@@ -123,6 +157,28 @@ const ADMIN_EMAILS = [
 ].map((email) => email.toLowerCase())
 const ADMIN_PASSCODE = 'CORA2026'
 const ADMIN_UNLOCK_STORAGE_KEY = 'cora-admin-unlocked'
+
+const SNF_APPROVAL_ROUTES = ['Sales HOD', 'BD HOD', 'Ops HOD', 'HSE'] as const
+const createEmptySnfForm = (): SnfForm => ({
+  ContractNo: 'Ad-hoc',
+  Customer: '',
+  ServiceAddress: '',
+  ServiceDetails: '',
+  ContractStartDate: '',
+  ContractEndDate: '',
+  ApprovalRoute: 'Sales HOD',
+  CreatedByName: '',
+  CreatedByEmail: '',
+})
+
+const SNF_STATUS_STEPS: SnfStatus[] = [
+  'Submitted',
+  'Pending HOD Approval',
+  'HOD Approved',
+  'Pending BD-Ops Acknowledgement',
+  'BD-Ops Acknowledged',
+  'Customer Added',
+]
 
 const normalize = (value: string) => value.trim().toLowerCase()
 const normalizeAutocompleteText = (value: string) =>
@@ -1136,6 +1192,14 @@ function Sidebar({
             {I.plus} New Order
           </button>
           <button
+            className={`cora-nav-item ${view === 'snf' ? 'active' : ''}`}
+            onClick={() => { onNav('snf'); onClose() }}
+            id="nav-snf"
+            aria-current={view === 'snf' ? 'page' : undefined}
+          >
+            {I.fileTxt} SNF Mock
+          </button>
+          <button
             className={`cora-nav-item ${view === 'list' ? 'active' : ''}`}
             onClick={() => { onNav('list'); onClose() }}
             disabled={!isAdmin}
@@ -1357,6 +1421,365 @@ function OrdersTable({ orders, loadState }: { orders: ServiceOrdersRead[]; loadS
           </table>
         </div>
       )}
+    </div>
+  )
+}
+
+function SnfMockPage({ currentUserEmail }: { currentUserEmail: string }) {
+  const [form, setForm] = useState<SnfForm>(() => ({
+    ...createEmptySnfForm(),
+    CreatedByName: 'Josephine',
+    CreatedByEmail: currentUserEmail || 'josephine@cora-environment.com',
+    Customer: 'Semula Pte Ltd',
+    ServiceAddress: '153 Kampong Ampat #04-02 Jun Jie Industrial Building Singapore 368326',
+    ServiceDetails: 'One time recycling service. 1 jumbo bag delivery of HDPE and PP samples.',
+    ContractStartDate: new Date().toISOString().slice(0, 10),
+  }))
+  const [requests, setRequests] = useState<SnfRequest[]>([
+    {
+      ...createEmptySnfForm(),
+      ID: 1,
+      Title: 'SNF-2026-0001',
+      Status: 'Pending HOD Approval',
+      ApprovalRoute: 'Sales HOD',
+      CreatedByName: 'Josephine',
+      CreatedByEmail: 'josephine@cora-environment.com',
+      ContractNo: 'Ad-hoc',
+      Customer: 'Semula Pte Ltd',
+      ServiceAddress: '153 Kampong Ampat #04-02 Jun Jie Industrial Building Singapore 368326',
+      ServiceDetails: 'One time recycling service. 1 jumbo bag delivery of HDPE and PP samples.',
+      ContractStartDate: '2026-02-23',
+      ContractEndDate: '',
+      HodDecision: '',
+      HodComments: '',
+      BdOpsAcknowledgedBy: '',
+      BdOpsNotes: '',
+      LastFlowError: '',
+    },
+    {
+      ...createEmptySnfForm(),
+      ID: 2,
+      Title: 'SNF-2026-0002',
+      Status: 'Customer Added',
+      ApprovalRoute: 'BD HOD',
+      CreatedByName: 'Adeline Liu',
+      CreatedByEmail: 'adeline@cora-environment.com',
+      ContractNo: 'MK/25/0115/01',
+      Customer: 'Methodist Welfare Services',
+      ServiceAddress: 'MWS Nursing Home - Eunos, 1A Chin Ching Avenue',
+      ServiceDetails: 'Daily REL collection. 4x660L bins with metal base.',
+      ContractStartDate: '2025-10-01',
+      ContractEndDate: '',
+      HodDecision: 'Approved',
+      HodComments: 'Approved for BD-Ops arrangement.',
+      BdOpsAcknowledgedBy: 'BD-Ops',
+      BdOpsNotes: 'Route planned. Customer visible for driver selection in DSO.',
+      CustomerListItemId: 4058,
+      LastFlowError: '',
+    },
+  ])
+  const [selectedRequestId, setSelectedRequestId] = useState(1)
+
+  const selectedRequest = requests.find((request) => request.ID === selectedRequestId) ?? requests[0]
+  const requiredComplete = Boolean(
+    form.Customer.trim()
+    && form.ServiceAddress.trim()
+    && form.ServiceDetails.trim()
+    && form.ApprovalRoute.trim(),
+  )
+  const statusCounts = requests.reduce<Record<SnfStatus, number>>((acc, request) => {
+    acc[request.Status] = (acc[request.Status] ?? 0) + 1
+    return acc
+  }, {} as Record<SnfStatus, number>)
+
+  const updateForm = (key: keyof SnfForm, value: string) => {
+    setForm((current) => ({ ...current, [key]: value }))
+  }
+
+  const updateRequest = (id: number, updater: (request: SnfRequest) => SnfRequest) => {
+    setRequests((current) => current.map((request) => request.ID === id ? updater(request) : request))
+  }
+
+  const submitMock = () => {
+    if (!requiredComplete) return
+    const nextId = Math.max(0, ...requests.map((request) => request.ID)) + 1
+    const nextRequest: SnfRequest = {
+      ...form,
+      ID: nextId,
+      Title: `SNF-2026-${String(nextId).padStart(4, '0')}`,
+      Status: 'Pending HOD Approval',
+      HodDecision: '',
+      HodComments: '',
+      BdOpsAcknowledgedBy: '',
+      BdOpsNotes: '',
+      LastFlowError: '',
+    }
+    setRequests((current) => [nextRequest, ...current])
+    setSelectedRequestId(nextId)
+    setForm({
+      ...createEmptySnfForm(),
+      CreatedByName: form.CreatedByName,
+      CreatedByEmail: form.CreatedByEmail,
+      ApprovalRoute: form.ApprovalRoute,
+    })
+  }
+
+  const simulateFlowApproval = (id: number) => {
+    updateRequest(id, (request) => ({
+      ...request,
+      Status: 'Pending BD-Ops Acknowledgement',
+      HodDecision: 'Approved',
+      HodComments: request.HodComments || 'Power Automate email approval received from HOD.',
+    }))
+  }
+
+  const simulateFlowRejection = (id: number) => {
+    updateRequest(id, (request) => ({
+      ...request,
+      Status: 'Rejected',
+      HodDecision: 'Rejected',
+      HodComments: request.HodComments || 'Power Automate email rejection received from HOD.',
+    }))
+  }
+
+  const acknowledgeBdOps = (id: number) => {
+    updateRequest(id, (request) => ({
+      ...request,
+      Status: 'Customer Added',
+      BdOpsAcknowledgedBy: request.BdOpsAcknowledgedBy || 'BD-Ops',
+      BdOpsNotes: request.BdOpsNotes || 'Route planned and customer added to the DSO customer list.',
+      CustomerListItemId: request.CustomerListItemId ?? 4000 + id,
+    }))
+  }
+
+  const statusStepIndex = selectedRequest ? SNF_STATUS_STEPS.indexOf(selectedRequest.Status) : -1
+
+  return (
+    <div className="cora-snf-page">
+      <div className="cora-snf-metrics" aria-label="SNF status summary">
+        <div className="cora-snf-metric">
+          <span>Pending HOD</span>
+          <strong>{statusCounts['Pending HOD Approval'] ?? 0}</strong>
+        </div>
+        <div className="cora-snf-metric">
+          <span>Pending BD-Ops</span>
+          <strong>{statusCounts['Pending BD-Ops Acknowledgement'] ?? 0}</strong>
+        </div>
+        <div className="cora-snf-metric">
+          <span>Customer Added</span>
+          <strong>{statusCounts['Customer Added'] ?? 0}</strong>
+        </div>
+      </div>
+
+      <div className="cora-snf-layout">
+        <section className="cora-card cora-snf-form-card">
+          <div className="cora-card-head">
+            <span className="cora-card-title">Create SNF Submission</span>
+            <span className="cora-card-badge">Mock Only</span>
+          </div>
+          <div className="cora-card-body">
+            <div className="cora-step-context cora-snf-flow-context">
+              <span className="cora-step-context-eyebrow">Power Automate Approval</span>
+              <strong>Submitting this mock represents creating an SNF row and triggering the approval flow.</strong>
+              <p>HOD approval is not performed in this app screen. Power Automate sends the approval email, receives the decision, and updates the SNF status back in SharePoint.</p>
+            </div>
+            <div className="cora-form-grid">
+              <div className="cora-section-divider"><span>Request Origin</span></div>
+              <div className="cora-field">
+                <label className="cora-label" htmlFor="snf-created-by-name">Created by</label>
+                <input
+                  id="snf-created-by-name"
+                  className="cora-input"
+                  value={form.CreatedByName}
+                  onChange={(event) => updateForm('CreatedByName', event.target.value)}
+                />
+              </div>
+              <div className="cora-field">
+                <label className="cora-label" htmlFor="snf-created-by-email">Email</label>
+                <input
+                  id="snf-created-by-email"
+                  className="cora-input"
+                  value={form.CreatedByEmail}
+                  onChange={(event) => updateForm('CreatedByEmail', event.target.value)}
+                />
+              </div>
+
+              <div className="cora-section-divider"><span>SNF Details</span></div>
+              <div className="cora-field">
+                <label className="cora-label" htmlFor="snf-contract-no">Contract no</label>
+                <input
+                  id="snf-contract-no"
+                  className="cora-input"
+                  value={form.ContractNo}
+                  onChange={(event) => updateForm('ContractNo', event.target.value)}
+                  placeholder="Ad-hoc"
+                />
+              </div>
+              <div className="cora-field">
+                <label className="cora-label" htmlFor="snf-approval-route">Approval route <span className="req">*</span></label>
+                <CustomSelect
+                  id="snf-approval-route"
+                  value={form.ApprovalRoute}
+                  onChange={(value) => updateForm('ApprovalRoute', value)}
+                  options={SNF_APPROVAL_ROUTES.map((route) => ({ value: route, label: route }))}
+                  searchable={false}
+                />
+              </div>
+              <div className="cora-field">
+                <label className="cora-label" htmlFor="snf-customer">Customer <span className="req">*</span></label>
+                <input
+                  id="snf-customer"
+                  className="cora-input"
+                  value={form.Customer}
+                  onChange={(event) => updateForm('Customer', event.target.value)}
+                  placeholder="Customer or company name"
+                />
+              </div>
+              <div className="cora-field">
+                <label className="cora-label" htmlFor="snf-start-date">Contract start</label>
+                <CustomDatePicker
+                  id="snf-start-date"
+                  value={form.ContractStartDate}
+                  onChange={(value) => updateForm('ContractStartDate', value)}
+                />
+              </div>
+              <div className="cora-field">
+                <label className="cora-label" htmlFor="snf-end-date">Contract end</label>
+                <CustomDatePicker
+                  id="snf-end-date"
+                  value={form.ContractEndDate}
+                  onChange={(value) => updateForm('ContractEndDate', value)}
+                />
+              </div>
+              <div className="cora-field span">
+                <label className="cora-label" htmlFor="snf-address">Service address <span className="req">*</span></label>
+                <textarea
+                  id="snf-address"
+                  className="cora-textarea"
+                  value={form.ServiceAddress}
+                  onChange={(event) => updateForm('ServiceAddress', event.target.value)}
+                  placeholder="Full service address"
+                />
+              </div>
+              <div className="cora-field span">
+                <label className="cora-label" htmlFor="snf-service-details">Service details <span className="req">*</span></label>
+                <textarea
+                  id="snf-service-details"
+                  className="cora-textarea cora-snf-service-details"
+                  value={form.ServiceDetails}
+                  onChange={(event) => updateForm('ServiceDetails', event.target.value)}
+                  placeholder="Scope, frequency, bins, tonnage reports, remarks"
+                />
+              </div>
+            </div>
+          </div>
+          <div className="cora-card-foot">
+              <span className="cora-snf-foot-note">Front-end mock. Real approval will be handled by Power Automate email approvals.</span>
+            <button className="cora-btn cora-btn-primary" type="button" onClick={submitMock} disabled={!requiredComplete}>
+              {I.send} Submit SNF
+            </button>
+          </div>
+        </section>
+
+        <aside className="cora-snf-side">
+          <section className="cora-card">
+            <div className="cora-card-head">
+              <span className="cora-card-title">Status Cards</span>
+              <span className="cora-card-badge">{requests.length} mock</span>
+            </div>
+            <div className="cora-snf-request-list">
+              {requests.map((request) => (
+                <button
+                  key={request.ID}
+                  className={`cora-snf-request ${selectedRequest?.ID === request.ID ? 'active' : ''}`}
+                  type="button"
+                  onClick={() => setSelectedRequestId(request.ID)}
+                >
+                  <span>
+                    <strong>{request.Title}</strong>
+                    <small>{request.Customer}</small>
+                  </span>
+                  <em className={`cora-snf-status is-${request.Status.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`}>{request.Status}</em>
+                </button>
+              ))}
+            </div>
+          </section>
+
+          {selectedRequest && (
+            <section className="cora-card cora-snf-selected-card">
+              <div className="cora-card-head">
+                <span className="cora-card-title">{selectedRequest.Title}</span>
+                <span className="cora-card-badge">{selectedRequest.ApprovalRoute}</span>
+              </div>
+              <div className="cora-card-body">
+                <div className="cora-snf-flow">
+                  {SNF_STATUS_STEPS.map((status, index) => (
+                    <div
+                      key={status}
+                      className={`cora-snf-flow-step ${index <= statusStepIndex ? 'done' : ''} ${selectedRequest.Status === status ? 'active' : ''}`}
+                    >
+                      <span>{index + 1}</span>
+                      <strong>{status}</strong>
+                    </div>
+                  ))}
+                </div>
+                <div className="cora-snf-summary">
+                  <p><strong>Customer</strong><span>{selectedRequest.Customer}</span></p>
+                  <p><strong>Address</strong><span>{selectedRequest.ServiceAddress}</span></p>
+                  <p><strong>Service</strong><span>{selectedRequest.ServiceDetails}</span></p>
+                  {selectedRequest.CustomerListItemId && <p><strong>Customer row</strong><span>#{selectedRequest.CustomerListItemId}</span></p>}
+                </div>
+                <div className="cora-field">
+                  <label className="cora-label" htmlFor="snf-hod-comments">HOD comments</label>
+                  <textarea
+                    id="snf-hod-comments"
+                    className="cora-textarea"
+                    value={selectedRequest.HodComments}
+                    onChange={(event) => updateRequest(selectedRequest.ID, (request) => ({ ...request, HodComments: event.target.value }))}
+                    placeholder="Flow writes approval comments from the email response"
+                  />
+                  <p className="cora-field-hint">In production, this is written by Power Automate from the HOD email approval response.</p>
+                </div>
+                <div className="cora-field">
+                  <label className="cora-label" htmlFor="snf-bd-ops-notes">BD-Ops notes</label>
+                  <textarea
+                    id="snf-bd-ops-notes"
+                    className="cora-textarea"
+                    value={selectedRequest.BdOpsNotes}
+                    onChange={(event) => updateRequest(selectedRequest.ID, (request) => ({ ...request, BdOpsNotes: event.target.value }))}
+                  />
+                </div>
+              </div>
+              <div className="cora-card-foot cora-snf-actions">
+                <button
+                  className="cora-btn cora-btn-outline"
+                  type="button"
+                  onClick={() => simulateFlowRejection(selectedRequest.ID)}
+                  disabled={selectedRequest.Status !== 'Pending HOD Approval'}
+                >
+                  Simulate Flow Rejection
+                </button>
+                <button
+                  className="cora-btn cora-btn-teal"
+                  type="button"
+                  onClick={() => simulateFlowApproval(selectedRequest.ID)}
+                  disabled={selectedRequest.Status !== 'Pending HOD Approval'}
+                >
+                  Simulate Flow Approval
+                </button>
+                <button
+                  className="cora-btn cora-btn-primary"
+                  type="button"
+                  onClick={() => acknowledgeBdOps(selectedRequest.ID)}
+                  disabled={selectedRequest.Status !== 'Pending BD-Ops Acknowledgement'}
+                >
+                  BD-Ops Acknowledge
+                </button>
+              </div>
+            </section>
+          )}
+        </aside>
+      </div>
     </div>
   )
 }
@@ -3919,16 +4342,22 @@ function App() {
   }
   const breadcrumbCurrentLabel = view === 'form'
     ? 'New Service Order'
+    : view === 'snf'
+      ? 'SNF Mock'
     : view === 'admin'
       ? `Admin / ${activeReferenceLabel[adminTab]}`
       : 'All Orders'
   const pageTitle = view === 'form'
     ? 'Create Service Order'
+    : view === 'snf'
+      ? 'Create SNF'
     : view === 'admin'
       ? activeReferenceLabel[adminTab]
       : 'Service Orders'
   const pageDescription = view === 'form'
     ? 'Complete the guided flow below to create a new service order from any device.'
+    : view === 'snf'
+      ? 'Mock the Service Notice Form submission, HOD approval, BD-Ops acknowledgement, and customer creation flow.'
     : view === 'admin'
       ? `Manage ${activeReferenceLabel[adminTab].toLowerCase()} used by the service order workflow.`
       : 'Review service order records and filter the history by customer, resource, or collection date.'
@@ -4007,7 +4436,7 @@ function App() {
             <p>{pageDescription}</p>
           </div>
 
-          <div className={`cora-sync-banner is-${syncStatus}`} role="status" aria-live="polite">
+          {view !== 'snf' && <div className={`cora-sync-banner is-${syncStatus}`} role="status" aria-live="polite">
             <div className="cora-sync-banner-main">
               <span className="cora-sync-banner-badge">{syncHeadline}</span>
               <strong>{syncBody}</strong>
@@ -4029,10 +4458,12 @@ function App() {
                 {queueSyncing ? 'Syncing…' : 'Retry Sync'}
               </button>
             </div>
-          </div>
+          </div>}
 
           {/* ════ LIST VIEW ════ */}
           {view === 'list' && isAdmin && adminUnlocked && <OrdersTable orders={orders} loadState={loadState} />}
+
+          {view === 'snf' && <SnfMockPage currentUserEmail={currentUserEmail} />}
 
           {view === 'admin' && isAdmin && adminUnlocked && (
             <AdminReferencePage
