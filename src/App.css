@@ -1365,6 +1365,14 @@
   padding: 10px;
 }
 
+.cora-snf-search {
+  display: grid;
+  gap: 6px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--b1);
+  background: var(--s2);
+}
+
 .cora-snf-request {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -1386,6 +1394,7 @@
 .cora-snf-request span { display: grid; gap: 3px; min-width: 0; }
 .cora-snf-request strong { font-size: 0.86rem; font-weight: 400; overflow-wrap: anywhere; }
 .cora-snf-request small { color: var(--tx-secondary); font-size: 0.76rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cora-snf-empty { padding: 28px 14px; }
 
 .cora-snf-status {
   display: inline-flex;

@@ -1479,7 +1479,22 @@ function SnfMockPage({ currentUserEmail }: { currentUserEmail: string }) {
     },
   ])
   const [selectedRequestId, setSelectedRequestId] = useState(1)
+  const [requestSearch, setRequestSearch] = useState('')
 
+  const normalizedRequestSearch = normalizeAutocompleteText(requestSearch)
+  const filteredRequests = requests.filter((request) => {
+    if (!normalizedRequestSearch) return true
+    return [
+      request.Title,
+      request.Customer,
+      request.Status,
+      request.ApprovalRoute,
+      request.ServiceAddress,
+      request.ServiceDetails,
+      request.CreatedByName,
+      request.CreatedByEmail,
+    ].some((value) => normalizeAutocompleteText(value).includes(normalizedRequestSearch))
+  })
   const selectedRequest = requests.find((request) => request.ID === selectedRequestId) ?? requests[0]
   const requiredComplete = Boolean(
     form.Customer.trim()
@@ -1687,8 +1702,18 @@ function SnfMockPage({ currentUserEmail }: { currentUserEmail: string }) {
               <span className="cora-card-title">Status Cards</span>
               <span className="cora-card-badge">{requests.length} mock</span>
             </div>
+            <div className="cora-snf-search">
+              <label className="cora-label" htmlFor="snf-request-search">Search SNF requests</label>
+              <input
+                id="snf-request-search"
+                className="cora-input"
+                value={requestSearch}
+                onChange={(event) => setRequestSearch(event.target.value)}
+                placeholder="SNF no, customer, status, route..."
+              />
+            </div>
             <div className="cora-snf-request-list">
-              {requests.map((request) => (
+              {filteredRequests.map((request) => (
                 <button
                   key={request.ID}
                   className={`cora-snf-request ${selectedRequest?.ID === request.ID ? 'active' : ''}`}
@@ -1702,6 +1727,12 @@ function SnfMockPage({ currentUserEmail }: { currentUserEmail: string }) {
                   <em className={`cora-snf-status is-${request.Status.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`}>{request.Status}</em>
                 </button>
               ))}
+              {filteredRequests.length === 0 && (
+                <div className="cora-table-empty cora-snf-empty">
+                  <span className="cora-table-empty-icon">{I.fileTxt}</span>
+                  <span>No SNF requests match this search.</span>
+                </div>
+              )}
             </div>
           </section>
 
