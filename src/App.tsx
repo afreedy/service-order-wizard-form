@@ -18,6 +18,7 @@ import { Customer_area_data_clean_finalService } from './generated/services/Cust
 import { VehiclesService } from './generated/services/VehiclesService'
 import { Waste_CategoriesService } from './generated/services/Waste_CategoriesService'
 import { ServiceOrdersService } from './generated/services/ServiceOrdersService'
+import { preprocessImageForOcr, runWeightOcr } from './weightOcr'
 import type { CropRect } from './weightOcr'
 import type { CachedReferenceData, Form, PersistedDraft, PersistedForm, PersistedWasteLine, WasteLine } from './lib/offlineStore'
 import { clearDraft, fromStoredMediaFile, getQueueSummary, loadDraft, saveDraft, toStoredMediaFile } from './lib/offlineStore'
@@ -3016,7 +3017,6 @@ function StepAssignment({
 
   const runOcrForLine = async (id: string, imageSource: string, requestId: string, crop?: CropRect) => {
     try {
-      const { preprocessImageForOcr, runWeightOcr } = await import('./weightOcr')
       const preprocessed = await preprocessImageForOcr(imageSource, crop, {
         maxImageSide: deviceProfile.maxOcrImageSide,
         maxVariants: deviceProfile.maxOcrVariants,
