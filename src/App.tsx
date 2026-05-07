@@ -410,10 +410,19 @@ const pad = (value: number) => String(value).padStart(2, '0')
 const formatDateInputValue = (date: Date) =>
   `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
 
-const createObjectPreviewUrl = (file: Blob | File | null | undefined) => {
-  if (!file) return ''
-  return URL.createObjectURL(file)
-}
+const fileToDataUrl = (file: Blob | File) =>
+  new Promise<string>((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => {
+      if (typeof reader.result === 'string') {
+        resolve(reader.result)
+        return
+      }
+      reject(new Error('Could not read image preview.'))
+    }
+    reader.onerror = () => reject(reader.error ?? new Error('Could not read image preview.'))
+    reader.readAsDataURL(file)
+  })
 
 const revokeObjectPreviewUrl = (url: string | undefined) => {
   if (url?.startsWith('blob:')) URL.revokeObjectURL(url)
@@ -429,30 +438,26 @@ const loadImageObjectUrl = (url: string) =>
 
 const resizeImageFile = async (file: File, maxImageSide: number, quality = 0.72) => {
   if (!file.type.startsWith('image/')) return file
-  const sourceUrl = URL.createObjectURL(file)
-  try {
-    const image = await loadImageObjectUrl(sourceUrl)
-    const largestSide = Math.max(image.naturalWidth, image.naturalHeight)
-    if (!largestSide || largestSide <= maxImageSide) return file
-    const scale = maxImageSide / largestSide
-    const width = Math.max(1, Math.round(image.naturalWidth * scale))
-    const height = Math.max(1, Math.round(image.naturalHeight * scale))
-    const canvas = document.createElement('canvas')
-    canvas.width = width
-    canvas.height = height
-    const ctx = canvas.getContext('2d')
-    if (!ctx) return file
-    ctx.drawImage(image, 0, 0, width, height)
-    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/jpeg', quality))
-    if (!blob) return file
-    const resizedName = file.name.replace(/\.[^.]+$/, '') || 'image'
-    return new File([blob], `${resizedName}.jpg`, {
-      type: 'image/jpeg',
-      lastModified: file.lastModified || Date.now(),
-    })
-  } finally {
-    URL.revokeObjectURL(sourceUrl)
-  }
+  const sourceUrl = await fileToDataUrl(file)
+  const image = await loadImageObjectUrl(sourceUrl)
+  const largestSide = Math.max(image.naturalWidth, image.naturalHeight)
+  if (!largestSide || largestSide <= maxImageSide) return file
+  const scale = maxImageSide / largestSide
+  const width = Math.max(1, Math.round(image.naturalWidth * scale))
+  const height = Math.max(1, Math.round(image.naturalHeight * scale))
+  const canvas = document.createElement('canvas')
+  canvas.width = width
+  canvas.height = height
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return file
+  ctx.drawImage(image, 0, 0, width, height)
+  const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/jpeg', quality))
+  if (!blob) return file
+  const resizedName = file.name.replace(/\.[^.]+$/, '') || 'image'
+  return new File([blob], `${resizedName}.jpg`, {
+    type: 'image/jpeg',
+    lastModified: file.lastModified || Date.now(),
+  })
 }
 
 const generateOrderTitle = () => {
@@ -505,7 +510,7 @@ const restorePersistedForm = async (persisted: PersistedForm): Promise<Form> => 
       WasteCategory: line.WasteCategory,
       Tonnage: line.Tonnage,
       scalePhotoFile: scalePhotoFile ?? undefined,
-      scalePhotoPreviewUrl: createObjectPreviewUrl(scalePhotoFile),
+      scalePhotoPreviewUrl: scalePhotoFile ? await fileToDataUrl(scalePhotoFile) : undefined,
       scaleOcrCropPreviewUrl: line.scaleOcrCropPreviewDataUrl,
       scaleOcrCrop: line.scaleOcrCrop,
       scaleOcrStatus: line.scaleOcrStatus,
@@ -3077,9 +3082,25 @@ function StepAssignment({
 
     const requestId = `scale-ocr-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
     scalePhotoRequestIdsRef.current[id] = requestId
-    const preparedFile = await resizeImageFile(file, deviceProfile.maxOcrImageSide, deviceProfile.isLowResourceMode ? 0.68 : 0.76)
-    if (scalePhotoRequestIdsRef.current[id] !== requestId) return
-    const previewUrl = createObjectPreviewUrl(preparedFile)
+    let preparedFile = file
+    let previewUrl = ''
+    try {
+      preparedFile = await resizeImageFile(file, deviceProfile.maxOcrImageSide, deviceProfile.isLowResourceMode ? 0.68 : 0.76)
+        .catch(() => file)
+      if (scalePhotoRequestIdsRef.current[id] !== requestId) return
+      previewUrl = await fileToDataUrl(preparedFile)
+    } catch (error) {
+      if (scalePhotoRequestIdsRef.current[id] !== requestId) return
+      updateWasteLine(id, {
+        scaleOcrStatus: 'error',
+        scaleOcrText: undefined,
+        scaleOcrSuggestion: undefined,
+        scaleOcrConfidence: undefined,
+        scaleOcrReasons: undefined,
+        scaleOcrError: error instanceof Error ? error.message : 'Could not prepare image preview.',
+      })
+      return
+    }
     updateForm((current) => ({
       ...current,
       WasteItems: current.WasteItems.map((line) => {
@@ -3874,8 +3895,8 @@ function App() {
           const restoredAfterPhoto = await fromStoredMediaFile(draft.payload.afterPhoto)
           setBeforePhotoFile(restoredBeforePhoto)
           setAfterPhotoFile(restoredAfterPhoto)
-          setBeforePhotoPreviewUrl(createObjectPreviewUrl(restoredBeforePhoto))
-          setAfterPhotoPreviewUrl(createObjectPreviewUrl(restoredAfterPhoto))
+          setBeforePhotoPreviewUrl(restoredBeforePhoto ? await fileToDataUrl(restoredBeforePhoto) : '')
+          setAfterPhotoPreviewUrl(restoredAfterPhoto ? await fileToDataUrl(restoredAfterPhoto) : '')
           setStep(draft.step)
           setSubmitted(draft.submissionStatus === 'queued')
           setSubmissionMode(draft.submissionStatus)
@@ -4032,23 +4053,27 @@ function App() {
       clearProofPhoto(target)
       return
     }
-    void resizeImageFile(file, deviceProfile.maxImageSide, deviceProfile.isLowResourceMode ? 0.66 : 0.74)
-      .then((preparedFile) => {
+    void (async () => {
+      try {
+        const preparedFile = await resizeImageFile(file, deviceProfile.maxImageSide, deviceProfile.isLowResourceMode ? 0.66 : 0.74)
+          .catch(() => file)
+        if (proofPhotoRequestIdsRef.current[target] !== requestId) return
+        const previewUrl = await fileToDataUrl(preparedFile)
         if (proofPhotoRequestIdsRef.current[target] !== requestId) return
         applyPhoto(preparedFile)
         applyPreview((current) => {
           revokeObjectPreviewUrl(current)
-          return createObjectPreviewUrl(preparedFile)
+          return previewUrl
         })
-      })
-      .catch(() => {
+      } catch {
         if (proofPhotoRequestIdsRef.current[target] !== requestId) return
         applyPhoto(file)
         applyPreview((current) => {
           revokeObjectPreviewUrl(current)
-          return createObjectPreviewUrl(file)
+          return ''
         })
-      })
+      }
+    })()
   }, [clearProofPhoto, deviceProfile.isLowResourceMode, deviceProfile.maxImageSide])
 
   const reset = useCallback(() => {
