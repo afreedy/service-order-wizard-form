@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it } from 'vitest'
 import { makeDraft, makeQueuedSubmission } from '../test/fixtures'
 import {
   clearDraft,
@@ -45,9 +45,24 @@ describe('offlineStore', () => {
       type: 'image/png',
       lastModified: 12345,
     })
-    expect(stored?.dataUrl).toContain('data:image/png;base64,')
+    expect(stored?.blob).toBeInstanceOf(Blob)
+    expect(stored?.dataUrl).toBeUndefined()
     expect(restored).not.toBeNull()
     await expect(restored?.text()).resolves.toBe('proof-image')
+  })
+
+  it('restores legacy data-url media values', async () => {
+    const restored = await fromStoredMediaFile({
+      dataUrl: 'data:text/plain;base64,bGVnYWN5LW1lZGlh',
+      name: 'legacy.txt',
+      type: 'text/plain',
+      lastModified: 67890,
+    })
+
+    expect(restored?.name).toBe('legacy.txt')
+    expect(restored?.type).toBe('text/plain')
+    expect(restored?.lastModified).toBe(67890)
+    await expect(restored?.text()).resolves.toBe('legacy-media')
   })
 
   it('handles nullable and blob-backed stored media values', async () => {
@@ -67,31 +82,6 @@ describe('offlineStore', () => {
     expect(restored?.type).toBe('text/plain')
     expect(typeof restored?.lastModified).toBe('number')
     await expect(restored?.text()).resolves.toBe('blob-only')
-  })
-
-  it('rejects when FileReader does not return a string data url', async () => {
-    const OriginalFileReader = globalThis.FileReader
-
-    class BadFileReader {
-      result: ArrayBuffer | null = new ArrayBuffer(8)
-      error: DOMException | null = null
-      onload: null | (() => void) = null
-      onerror: null | (() => void) = null
-
-      readAsDataURL() {
-        this.onload?.()
-      }
-    }
-
-    vi.stubGlobal('FileReader', BadFileReader)
-
-    try {
-      await expect(
-        toStoredMediaFile(new File(['x'], 'bad.bin', { type: 'application/octet-stream' })),
-      ).rejects.toThrow('Could not prepare media for offline storage.')
-    } finally {
-      vi.stubGlobal('FileReader', OriginalFileReader)
-    }
   })
 
   it('saves and clears the active draft', async () => {

@@ -34,6 +34,11 @@ export interface OcrPreprocessResult {
   cropRect: CropRect
 }
 
+export interface OcrPreprocessOptions {
+  maxImageSide?: number
+  maxVariants?: number
+}
+
 export type OcrSource = 'sevenSegment' | 'tesseract' | 'remote' | 'merged'
 
 export interface OcrCandidate {
@@ -493,10 +498,16 @@ const imageDataToUrl = (imageData: ImageData, options: ImageVariantOptions) => {
   return canvas.toDataURL('image/png')
 }
 
-export const preprocessImageForOcr = async (source: File | string, cropRect?: CropRect): Promise<OcrPreprocessResult> => {
+export const preprocessImageForOcr = async (
+  source: File | string,
+  cropRect?: CropRect,
+  options: OcrPreprocessOptions = {},
+): Promise<OcrPreprocessResult> => {
   const image = await loadImageSource(source)
-  const upscale = Math.max(1, MIN_OCR_WIDTH / image.naturalWidth)
-  const downscale = MAX_OCR_WIDTH / image.naturalWidth
+  const maxOcrWidth = options.maxImageSide ?? MAX_OCR_WIDTH
+  const minOcrWidth = Math.min(MIN_OCR_WIDTH, maxOcrWidth)
+  const upscale = Math.max(1, minOcrWidth / image.naturalWidth)
+  const downscale = maxOcrWidth / image.naturalWidth
   const scale = Math.min(upscale, downscale)
   const width = Math.max(1, Math.round(image.naturalWidth * scale))
   const height = Math.max(1, Math.round(image.naturalHeight * scale))
@@ -528,14 +539,16 @@ export const preprocessImageForOcr = async (source: File | string, cropRect?: Cr
       imageData,
     ]
 
-  return {
-    candidateTexts: sevenSegmentText ? [sevenSegmentText] : [],
-    imageDataUrls: imageDataVariants.flatMap((variant) => [
+  const allVariantUrls = imageDataVariants.flatMap((variant) => [
     imageDataToUrl(variant, { mode: 'invertedBinary', dilateDark: true, whiteBorder: true }),
     imageDataToUrl(variant, { mode: 'invertedBinary', whiteBorder: true }),
     imageDataToUrl(variant, { mode: 'binary', whiteBorder: true }),
     imageDataToUrl(variant, { mode: 'gray', whiteBorder: true }),
-    ]),
+  ])
+
+  return {
+    candidateTexts: sevenSegmentText ? [sevenSegmentText] : [],
+    imageDataUrls: allVariantUrls.slice(0, options.maxVariants ?? allVariantUrls.length),
     cropPreviewUrl: imageDataToPreviewUrl(selectedCrop),
     cropRect: bboxToCropRect(selectedBbox, width, height),
   }

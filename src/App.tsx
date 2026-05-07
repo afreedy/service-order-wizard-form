@@ -18,12 +18,12 @@ import { Customer_area_data_clean_finalService } from './generated/services/Cust
 import { VehiclesService } from './generated/services/VehiclesService'
 import { Waste_CategoriesService } from './generated/services/Waste_CategoriesService'
 import { ServiceOrdersService } from './generated/services/ServiceOrdersService'
-import { preprocessImageForOcr, runWeightOcr } from './weightOcr'
 import type { CropRect } from './weightOcr'
 import type { CachedReferenceData, Form, PersistedDraft, PersistedForm, PersistedWasteLine, WasteLine } from './lib/offlineStore'
 import { clearDraft, fromStoredMediaFile, getQueueSummary, loadDraft, saveDraft, toStoredMediaFile } from './lib/offlineStore'
 import { createClientSubmissionId, enqueueSubmission, processPendingQueue } from './lib/offlineQueue'
 import { readCachedReferenceData, writeCachedReferenceData } from './lib/referenceCache'
+import { getDevicePerformanceProfile, type DevicePerformanceProfile } from './lib/devicePerformance'
 import logoImage from './assets/cora-logo.svg?inline'
 import './App.css'
 
@@ -409,19 +409,50 @@ const pad = (value: number) => String(value).padStart(2, '0')
 const formatDateInputValue = (date: Date) =>
   `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
 
-const fileToDataUrl = (file: Blob | File) =>
-  new Promise<string>((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => {
-      if (typeof reader.result === 'string') {
-        resolve(reader.result)
-        return
-      }
-      reject(new Error('Could not read image preview.'))
-    }
-    reader.onerror = () => reject(reader.error ?? new Error('Could not read image preview.'))
-    reader.readAsDataURL(file)
+const createObjectPreviewUrl = (file: Blob | File | null | undefined) => {
+  if (!file) return ''
+  return URL.createObjectURL(file)
+}
+
+const revokeObjectPreviewUrl = (url: string | undefined) => {
+  if (url?.startsWith('blob:')) URL.revokeObjectURL(url)
+}
+
+const loadImageObjectUrl = (url: string) =>
+  new Promise<HTMLImageElement>((resolve, reject) => {
+    const image = new Image()
+    image.onload = () => resolve(image)
+    image.onerror = () => reject(new Error('Could not prepare image preview.'))
+    image.src = url
   })
+
+const resizeImageFile = async (file: File, maxImageSide: number, quality = 0.72) => {
+  if (!file.type.startsWith('image/')) return file
+  const sourceUrl = URL.createObjectURL(file)
+  try {
+    const image = await loadImageObjectUrl(sourceUrl)
+    const largestSide = Math.max(image.naturalWidth, image.naturalHeight)
+    if (!largestSide || largestSide <= maxImageSide) return file
+    const scale = maxImageSide / largestSide
+    const width = Math.max(1, Math.round(image.naturalWidth * scale))
+    const height = Math.max(1, Math.round(image.naturalHeight * scale))
+    const canvas = document.createElement('canvas')
+    canvas.width = width
+    canvas.height = height
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return file
+    ctx.drawImage(image, 0, 0, width, height)
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/jpeg', quality))
+    if (!blob) return file
+    const resizedName = file.name.replace(/\.[^.]+$/, '') || 'image'
+    return new File([blob], `${resizedName}.jpg`, {
+      type: 'image/jpeg',
+      lastModified: file.lastModified || Date.now(),
+    })
+  } finally {
+    URL.revokeObjectURL(sourceUrl)
+  }
+}
 
 const generateOrderTitle = () => {
   const now = new Date()
@@ -473,7 +504,7 @@ const restorePersistedForm = async (persisted: PersistedForm): Promise<Form> => 
       WasteCategory: line.WasteCategory,
       Tonnage: line.Tonnage,
       scalePhotoFile: scalePhotoFile ?? undefined,
-      scalePhotoPreviewUrl: scalePhotoFile ? await fileToDataUrl(scalePhotoFile) : undefined,
+      scalePhotoPreviewUrl: createObjectPreviewUrl(scalePhotoFile),
       scaleOcrCropPreviewUrl: line.scaleOcrCropPreviewDataUrl,
       scaleOcrCrop: line.scaleOcrCrop,
       scaleOcrStatus: line.scaleOcrStatus,
@@ -500,34 +531,6 @@ const getCompleteWasteLines = (lines: WasteLine[]) => lines.filter(isWasteLineCo
 const hasIncompleteWasteLine = (lines: WasteLine[]) =>
   lines.some((line) => hasWasteLineValue(line) && !isWasteLineComplete(line))
 
-const useFilePreviewDataUrl = (file: File | null) => {
-  const [previewUrl, setPreviewUrl] = useState('')
-
-  useEffect(() => {
-    let cancelled = false
-
-    if (!file) {
-      return () => {
-        cancelled = true
-      }
-    }
-
-    void fileToDataUrl(file)
-      .then((url) => {
-        if (!cancelled) setPreviewUrl(url)
-      })
-      .catch(() => {
-        if (!cancelled) setPreviewUrl('')
-      })
-
-    return () => {
-      cancelled = true
-    }
-  }, [file])
-
-  return file ? previewUrl : ''
-}
-
 const STEPS = [
   { label: 'Basic Info', desc: 'Title & date', icon: I.fileTxt },
   { label: 'Customer', desc: 'Customer details', icon: I.building },
@@ -537,6 +540,21 @@ const STEPS = [
 ] as const
 
 const LAST_STEP = STEPS.length - 1
+const ORDERS_PAGE_SIZE = 40
+const ADMIN_PAGE_SIZE = 30
+const ORDER_TABLE_COLS = ['ID', 'Title', 'CustomerName', 'DriverName', 'VehicleNumber', 'DateOfCollection'] as const
+const ORDER_TABLE_LABELS: Record<(typeof ORDER_TABLE_COLS)[number], string> = {
+  ID: 'ID',
+  Title: 'Title',
+  CustomerName: 'Customer',
+  DriverName: 'Driver',
+  VehicleNumber: 'Vehicle',
+  DateOfCollection: 'Collection Date',
+}
+
+const getPageCount = (itemCount: number, pageSize: number) => Math.max(1, Math.ceil(itemCount / pageSize))
+const clampPage = (page: number, itemCount: number, pageSize: number) =>
+  Math.min(Math.max(1, page), getPageCount(itemCount, pageSize))
 
 const parseIsoDate = (value: string) => {
   const [year, month, day] = value.split('-').map(Number)
@@ -1286,33 +1304,68 @@ function ToastNotif({ toast, onClose }: { toast: Toast; onClose: () => void }) {
   )
 }
 
+function PaginationControls({
+  page, pageSize, totalItems, onPageChange, label,
+}: {
+  page: number
+  pageSize: number
+  totalItems: number
+  onPageChange: (page: number) => void
+  label: string
+}) {
+  const pageCount = getPageCount(totalItems, pageSize)
+  const safePage = clampPage(page, totalItems, pageSize)
+  const start = totalItems === 0 ? 0 : (safePage - 1) * pageSize + 1
+  const end = Math.min(totalItems, safePage * pageSize)
+
+  if (totalItems <= pageSize) return null
+
+  return (
+    <div className="cora-pagination" aria-label={`${label} pagination`}>
+      <span>{start}-{end} of {totalItems}</span>
+      <div className="cora-pagination-actions">
+        <button
+          className="cora-btn cora-btn-outline"
+          type="button"
+          onClick={() => onPageChange(safePage - 1)}
+          disabled={safePage <= 1}
+        >
+          Previous
+        </button>
+        <span>Page {safePage} of {pageCount}</span>
+        <button
+          className="cora-btn cora-btn-outline"
+          type="button"
+          onClick={() => onPageChange(safePage + 1)}
+          disabled={safePage >= pageCount}
+        >
+          Next
+        </button>
+      </div>
+    </div>
+  )
+}
+
 /* ── Orders Table ── */
 function OrdersTable({ orders, loadState }: { orders: ServiceOrdersRead[]; loadState: Load }) {
   const [search, setSearch] = useState('')
   const [selectedDate, setSelectedDate] = useState('')
-
-  const cols = ['ID', 'Title', 'CustomerName', 'DriverName', 'VehicleNumber', 'DateOfCollection'] as const
-  const colLabels: Record<(typeof cols)[number], string> = {
-    ID: 'ID',
-    Title: 'Title',
-    CustomerName: 'Customer',
-    DriverName: 'Driver',
-    VehicleNumber: 'Vehicle',
-    DateOfCollection: 'Collection Date',
-  }
+  const [page, setPage] = useState(1)
 
   const normalizedSearch = search.trim().toLowerCase()
   const hasSearch = Boolean(normalizedSearch)
   const hasDateFilter = Boolean(selectedDate)
   const filtered = orders.filter((o) => {
     const orderSearchValues = [
-      ...cols.map((c) => String(o[c] ?? '')),
+      ...ORDER_TABLE_COLS.map((c) => String(o[c] ?? '')),
       String(o.DateOfCollection ?? '').slice(0, 10).split('-').reverse().join('/'),
     ]
     const matchesSearch = !hasSearch || orderSearchValues.some((item) => normalizeAutocompleteText(item).includes(normalizeAutocompleteText(normalizedSearch)))
     const matchesDate = !hasDateFilter || String(o.DateOfCollection ?? '').slice(0, 10) === selectedDate
     return matchesSearch && matchesDate
   })
+  const safePage = clampPage(page, filtered.length, ORDERS_PAGE_SIZE)
+  const paginatedOrders = filtered.slice((safePage - 1) * ORDERS_PAGE_SIZE, safePage * ORDERS_PAGE_SIZE)
 
   const formatDateDisplay = (val: string) => {
     if (!val) return ''
@@ -1333,7 +1386,7 @@ function OrdersTable({ orders, loadState }: { orders: ServiceOrdersRead[]; loadS
     hasDateFilter ? `date ${formatDateDisplay(selectedDate)}` : '',
   ].filter(Boolean).join(' and ')
 
-  const formatCell = (col: (typeof cols)[number], value: unknown) => {
+  const formatCell = (col: (typeof ORDER_TABLE_COLS)[number], value: unknown) => {
     const str = String(value ?? '—')
     if (col === 'ID') return <span className="cora-table-id">{str}</span>
     if (col === 'DateOfCollection' && str !== '—') {
@@ -1357,7 +1410,10 @@ function OrdersTable({ orders, loadState }: { orders: ServiceOrdersRead[]; loadS
         <div className="cora-table-toolbar">
           <AutocompleteSearchInput
             value={search}
-            onChange={setSearch}
+            onChange={(nextSearch) => {
+              setSearch(nextSearch)
+              setPage(1)
+            }}
             suggestions={searchSuggestions}
             placeholder="Search orders..."
             ariaLabel="Search orders"
@@ -1366,10 +1422,20 @@ function OrdersTable({ orders, loadState }: { orders: ServiceOrdersRead[]; loadS
             <CustomDatePicker
               id="orders-date-filter"
               value={selectedDate}
-              onChange={setSelectedDate}
+              onChange={(nextDate) => {
+                setSelectedDate(nextDate)
+                setPage(1)
+              }}
             />
             {hasDateFilter && (
-              <button className="cora-table-date-clear" onClick={() => setSelectedDate('')} aria-label="Clear date filter">
+              <button
+                className="cora-table-date-clear"
+                onClick={() => {
+                  setSelectedDate('')
+                  setPage(1)
+                }}
+                aria-label="Clear date filter"
+              >
                 Clear date
               </button>
             )}
@@ -1408,17 +1474,24 @@ function OrdersTable({ orders, loadState }: { orders: ServiceOrdersRead[]; loadS
       {loadState === 'loaded' && filtered.length > 0 && (
         <div className="cora-table-wrap">
           <table>
-            <thead><tr>{cols.map((c) => <th key={c}>{colLabels[c]}</th>)}</tr></thead>
+            <thead><tr>{ORDER_TABLE_COLS.map((c) => <th key={c}>{ORDER_TABLE_LABELS[c]}</th>)}</tr></thead>
             <tbody>
-              {filtered.map((o, i) => (
+              {paginatedOrders.map((o, i) => (
                 <tr key={o.ID ?? i} style={{ animationDelay: `${Math.min(i * 30, 300)}ms` }}>
-                  {cols.map((c) => (
-                    <td key={c} data-label={colLabels[c]}>{formatCell(c, o[c])}</td>
+                  {ORDER_TABLE_COLS.map((c) => (
+                    <td key={c} data-label={ORDER_TABLE_LABELS[c]}>{formatCell(c, o[c])}</td>
                   ))}
                 </tr>
               ))}
             </tbody>
           </table>
+          <PaginationControls
+            page={safePage}
+            pageSize={ORDERS_PAGE_SIZE}
+            totalItems={filtered.length}
+            onPageChange={setPage}
+            label="Service orders"
+          />
         </div>
       )}
     </div>
@@ -1843,6 +1916,8 @@ function AdminReferencePage({
   onDeleteWasteCategory: (id: number, category: string) => Promise<void>
 }) {
   const [customerSearch, setCustomerSearch] = useState('')
+  const [customerPage, setCustomerPage] = useState(1)
+  const [simplePage, setSimplePage] = useState(1)
   const [driverName, setDriverName] = useState('')
   const [vehicleNumber, setVehicleNumber] = useState('')
   const [wasteCategory, setWasteCategory] = useState('')
@@ -1963,6 +2038,11 @@ function AdminReferencePage({
     const summary = getCustomerAdminSummary(item)
     return summary ? `${getCustomerName(item)} / ${summary}` : getCustomerName(item)
   })
+  const safeCustomerPage = clampPage(customerPage, filteredCustomers.length, ADMIN_PAGE_SIZE)
+  const paginatedCustomers = filteredCustomers.slice((safeCustomerPage - 1) * ADMIN_PAGE_SIZE, safeCustomerPage * ADMIN_PAGE_SIZE)
+  const validActiveItems = activeItems.filter((item): item is { id: number; value: string } => Boolean(item.id && item.value))
+  const safeSimplePage = clampPage(simplePage, validActiveItems.length, ADMIN_PAGE_SIZE)
+  const paginatedActiveItems = validActiveItems.slice((safeSimplePage - 1) * ADMIN_PAGE_SIZE, safeSimplePage * ADMIN_PAGE_SIZE)
 
   const openCustomerModal = (mode: 'create' | 'edit', item?: CustomerAreaOption & { ID: number }) => {
     setCustomerModal({
@@ -2065,6 +2145,8 @@ function AdminReferencePage({
                 setEditing(null)
                 setEditingError('')
                 setSimpleErrors({})
+                setCustomerPage(1)
+                setSimplePage(1)
                 onTabChange(tab.key)
               }}
               disabled={busy || Boolean(saving) || Boolean(busyItem)}
@@ -2084,7 +2166,10 @@ function AdminReferencePage({
               <div className="cora-admin-toolbar">
                 <AutocompleteSearchInput
                   value={customerSearch}
-                  onChange={setCustomerSearch}
+                  onChange={(nextSearch) => {
+                    setCustomerSearch(nextSearch)
+                    setCustomerPage(1)
+                  }}
                   suggestions={customerSearchSuggestions}
                   placeholder="Search customers or locations..."
                   ariaLabel="Search customers"
@@ -2155,7 +2240,7 @@ function AdminReferencePage({
               <div className="cora-table-empty">No customers match "{customerSearch.trim()}". Try a different name or location.</div>
             ) : (
               <div className="cora-admin-crud-list">
-                {filteredCustomers.map((item) => {
+                {paginatedCustomers.map((item) => {
                   const itemName = getCustomerName(item)
                   return (
                     <div className="cora-admin-crud-item cora-admin-customer-item" key={`customers-${item.ID}`}>
@@ -2184,13 +2269,20 @@ function AdminReferencePage({
                     </div>
                   )
                 })}
+                <PaginationControls
+                  page={safeCustomerPage}
+                  pageSize={ADMIN_PAGE_SIZE}
+                  totalItems={filteredCustomers.length}
+                  onPageChange={setCustomerPage}
+                  label="Customers"
+                />
               </div>
             )
-          ) : activeItems.filter((item) => item.id && item.value).length === 0 ? (
+          ) : validActiveItems.length === 0 ? (
             <div className="cora-table-empty">No {tabs.find((tab) => tab.key === activeTab)?.label.toLowerCase()} have been added yet. Use the form above to add one.</div>
           ) : (
             <div className="cora-admin-crud-list">
-              {activeItems.filter((item): item is { id: number; value: string } => Boolean(item.id && item.value)).map((item) => (
+              {paginatedActiveItems.map((item) => (
                 <div className="cora-admin-crud-item" key={`${activeTab}-${item.id}`}>
                   {editing?.tab === activeTab && editing.id === item.id ? (
                     <div className="cora-admin-inline-edit">
@@ -2269,6 +2361,13 @@ function AdminReferencePage({
                   </div>
                 </div>
               ))}
+              <PaginationControls
+                page={safeSimplePage}
+                pageSize={ADMIN_PAGE_SIZE}
+                totalItems={validActiveItems.length}
+                onPageChange={setSimplePage}
+                label={tabs.find((tab) => tab.key === activeTab)?.label ?? 'Reference data'}
+              />
             </div>
           )}
         </div>
@@ -2858,13 +2957,15 @@ function CropAdjustModal({
 }
 
 function StepAssignment({
-  form, set, updateForm, busy, driverOptions, vehicles, categories,
+  form, set, updateForm, busy, driverOptions, vehicles, categories, deviceProfile,
 }: {
   form: Form; set: <K extends keyof Form>(k: K, v: Form[K]) => void; busy: boolean
   updateForm: (updater: (current: Form) => Form) => void
   driverOptions: string[]; vehicles: VehiclesRead[]; categories: Waste_CategoriesRead[]
+  deviceProfile: DevicePerformanceProfile
 }) {
   const [cropEditingLineId, setCropEditingLineId] = useState<string | null>(null)
+  const scalePhotoRequestIdsRef = useRef<Record<string, string>>({})
   const cropEditingLine = form.WasteItems.find((line) => line.id === cropEditingLineId)
 
   const updateWasteLine = (id: string, changes: Partial<Omit<WasteLine, 'id'>>) => {
@@ -2881,15 +2982,20 @@ function StepAssignment({
   }
 
   const removeWasteLine = (id: string) => {
+    scalePhotoRequestIdsRef.current[id] = `removed-${Date.now()}`
+    const removedLine = form.WasteItems.find((line) => line.id === id)
+    revokeObjectPreviewUrl(removedLine?.scalePhotoPreviewUrl)
     const nextLines = form.WasteItems.filter((line) => line.id !== id)
     set('WasteItems', nextLines.length > 0 ? nextLines : [createWasteLine()])
   }
 
   const clearScalePhoto = (id: string) => {
+    scalePhotoRequestIdsRef.current[id] = `cleared-${Date.now()}`
     updateForm((current) => ({
       ...current,
       WasteItems: current.WasteItems.map((line) => {
         if (line.id !== id) return line
+        revokeObjectPreviewUrl(line.scalePhotoPreviewUrl)
         return {
           ...line,
           scalePhotoPreviewUrl: undefined,
@@ -2910,7 +3016,11 @@ function StepAssignment({
 
   const runOcrForLine = async (id: string, imageSource: string, requestId: string, crop?: CropRect) => {
     try {
-      const preprocessed = await preprocessImageForOcr(imageSource, crop)
+      const { preprocessImageForOcr, runWeightOcr } = await import('./weightOcr')
+      const preprocessed = await preprocessImageForOcr(imageSource, crop, {
+        maxImageSide: deviceProfile.maxOcrImageSide,
+        maxVariants: deviceProfile.maxOcrVariants,
+      })
       const result = await runWeightOcr(preprocessed.imageDataUrls, preprocessed.candidateTexts, {
         remoteImageDataUrl: preprocessed.cropPreviewUrl,
       })
@@ -2966,14 +3076,18 @@ function StepAssignment({
     }
 
     const requestId = `scale-ocr-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-    const previewUrl = await fileToDataUrl(file)
+    scalePhotoRequestIdsRef.current[id] = requestId
+    const preparedFile = await resizeImageFile(file, deviceProfile.maxOcrImageSide, deviceProfile.isLowResourceMode ? 0.68 : 0.76)
+    if (scalePhotoRequestIdsRef.current[id] !== requestId) return
+    const previewUrl = createObjectPreviewUrl(preparedFile)
     updateForm((current) => ({
       ...current,
       WasteItems: current.WasteItems.map((line) => {
         if (line.id !== id) return line
+        revokeObjectPreviewUrl(line.scalePhotoPreviewUrl)
         return {
           ...line,
-          scalePhotoFile: file,
+          scalePhotoFile: preparedFile,
           scalePhotoPreviewUrl: previewUrl,
           scaleOcrStatus: 'idle',
           scaleOcrText: undefined,
@@ -3591,11 +3705,46 @@ function App() {
   const [signatureDataUrl, setSignatureDataUrl] = useState('')
   const [beforePhotoFile, setBeforePhotoFile] = useState<File | null>(null)
   const [afterPhotoFile, setAfterPhotoFile] = useState<File | null>(null)
+  const [beforePhotoPreviewUrl, setBeforePhotoPreviewUrl] = useState('')
+  const [afterPhotoPreviewUrl, setAfterPhotoPreviewUrl] = useState('')
+  const proofPhotoRequestIdsRef = useRef({ before: '', after: '' })
+  const activePreviewUrlsRef = useRef({ before: '', after: '', wasteLines: [] as WasteLine[] })
   const [draftReady, setDraftReady] = useState(false)
   const [isOnline, setIsOnline] = useState(() => window.navigator.onLine)
   const [queuePendingCount, setQueuePendingCount] = useState(0)
   const [queueLastError, setQueueLastError] = useState('')
   const [queueSyncing, setQueueSyncing] = useState(false)
+  const [deviceProfile, setDeviceProfile] = useState(() => getDevicePerformanceProfile())
+
+  useEffect(() => {
+    const updateProfile = () => setDeviceProfile(getDevicePerformanceProfile())
+    window.addEventListener('resize', updateProfile)
+    return () => window.removeEventListener('resize', updateProfile)
+  }, [])
+
+  activePreviewUrlsRef.current = {
+    before: beforePhotoPreviewUrl,
+    after: afterPhotoPreviewUrl,
+    wasteLines: form.WasteItems,
+  }
+
+  useEffect(() => () => {
+    const { before, after, wasteLines } = activePreviewUrlsRef.current
+    revokeObjectPreviewUrl(before)
+    revokeObjectPreviewUrl(after)
+    for (const line of wasteLines) revokeObjectPreviewUrl(line.scalePhotoPreviewUrl)
+  }, [])
+
+  const clearProofPhoto = useCallback((target: 'before' | 'after') => {
+    proofPhotoRequestIdsRef.current[target] = `cleared-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    const applyPhoto = target === 'before' ? setBeforePhotoFile : setAfterPhotoFile
+    const applyPreview = target === 'before' ? setBeforePhotoPreviewUrl : setAfterPhotoPreviewUrl
+    applyPhoto(null)
+    applyPreview((current) => {
+      revokeObjectPreviewUrl(current)
+      return ''
+    })
+  }, [])
 
   const refreshQueueState = useCallback(async () => {
     const summary = await getQueueSummary()
@@ -3613,10 +3762,11 @@ function App() {
       await processPendingQueue({
         onSubmissionSynced: (item) => {
           if (item.clientSubmissionId === draftClientSubmissionId && submissionMode === 'queued') {
+            for (const line of form.WasteItems) revokeObjectPreviewUrl(line.scalePhotoPreviewUrl)
             setForm(createBlankForm())
             setSignatureDataUrl('')
-            setBeforePhotoFile(null)
-            setAfterPhotoFile(null)
+            clearProofPhoto('before')
+            clearProofPhoto('after')
             setStep(0)
             setSubmitted(false)
             setSubmissionMode('draft')
@@ -3636,7 +3786,7 @@ function App() {
       setQueueSyncing(false)
       await refreshQueueState()
     }
-  }, [draftClientSubmissionId, refreshQueueState, submissionMode])
+  }, [clearProofPhoto, draftClientSubmissionId, form.WasteItems, refreshQueueState, submissionMode])
 
   const loadReferenceData = useCallback(async () => {
     setLoadState('loading')
@@ -3720,8 +3870,12 @@ function App() {
         if (draft) {
           setForm(await restorePersistedForm(draft.payload.form))
           setSignatureDataUrl(draft.payload.signatureDataUrl)
-          setBeforePhotoFile(await fromStoredMediaFile(draft.payload.beforePhoto))
-          setAfterPhotoFile(await fromStoredMediaFile(draft.payload.afterPhoto))
+          const restoredBeforePhoto = await fromStoredMediaFile(draft.payload.beforePhoto)
+          const restoredAfterPhoto = await fromStoredMediaFile(draft.payload.afterPhoto)
+          setBeforePhotoFile(restoredBeforePhoto)
+          setAfterPhotoFile(restoredAfterPhoto)
+          setBeforePhotoPreviewUrl(createObjectPreviewUrl(restoredBeforePhoto))
+          setAfterPhotoPreviewUrl(createObjectPreviewUrl(restoredAfterPhoto))
           setStep(draft.step)
           setSubmitted(draft.submissionStatus === 'queued')
           setSubmissionMode(draft.submissionStatus)
@@ -3869,21 +4023,47 @@ function App() {
     [drivers],
   )
 
-  const beforePhotoPreviewUrl = useFilePreviewDataUrl(beforePhotoFile)
-  const afterPhotoPreviewUrl = useFilePreviewDataUrl(afterPhotoFile)
+  const setProofPhoto = useCallback((target: 'before' | 'after', file: File | null) => {
+    const applyPhoto = target === 'before' ? setBeforePhotoFile : setAfterPhotoFile
+    const applyPreview = target === 'before' ? setBeforePhotoPreviewUrl : setAfterPhotoPreviewUrl
+    const requestId = `${target}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    proofPhotoRequestIdsRef.current[target] = requestId
+    if (!file) {
+      clearProofPhoto(target)
+      return
+    }
+    void resizeImageFile(file, deviceProfile.maxImageSide, deviceProfile.isLowResourceMode ? 0.66 : 0.74)
+      .then((preparedFile) => {
+        if (proofPhotoRequestIdsRef.current[target] !== requestId) return
+        applyPhoto(preparedFile)
+        applyPreview((current) => {
+          revokeObjectPreviewUrl(current)
+          return createObjectPreviewUrl(preparedFile)
+        })
+      })
+      .catch(() => {
+        if (proofPhotoRequestIdsRef.current[target] !== requestId) return
+        applyPhoto(file)
+        applyPreview((current) => {
+          revokeObjectPreviewUrl(current)
+          return createObjectPreviewUrl(file)
+        })
+      })
+  }, [clearProofPhoto, deviceProfile.isLowResourceMode, deviceProfile.maxImageSide])
 
   const reset = useCallback(() => {
+    for (const line of form.WasteItems) revokeObjectPreviewUrl(line.scalePhotoPreviewUrl)
     setForm(createBlankForm())
     setSignatureDataUrl('')
-    setBeforePhotoFile(null)
-    setAfterPhotoFile(null)
+    clearProofPhoto('before')
+    clearProofPhoto('after')
     setStep(0)
     setSubmitted(false)
     setSubmissionMode('draft')
     setDraftClientSubmissionId(createClientSubmissionId())
     setSubmitting(false)
     void clearDraft()
-  }, [])
+  }, [clearProofPhoto, form.WasteItems])
 
   const clearCurrentStepFields = useCallback(() => {
     if (submitting || submitted) return
@@ -3918,6 +4098,7 @@ function App() {
     }
 
     if (step === 2) {
+      for (const line of form.WasteItems) revokeObjectPreviewUrl(line.scalePhotoPreviewUrl)
       setForm((current) => ({
         ...current,
         DriverName: '',
@@ -3931,14 +4112,14 @@ function App() {
 
     if (step === 3) {
       setSignatureDataUrl('')
-      setBeforePhotoFile(null)
-      setAfterPhotoFile(null)
+      clearProofPhoto('before')
+      clearProofPhoto('after')
       setToast({ type: 'success', text: 'Proof fields cleared.' })
       return
     }
 
     setToast({ type: 'error', text: 'There are no editable fields to clear on the review page.' })
-  }, [step, submitted, submitting])
+  }, [clearProofPhoto, form.WasteItems, step, submitted, submitting])
 
   const persistReferenceCache = useCallback(async (next: Partial<CachedReferenceData>) => {
     const record: CachedReferenceData = {
@@ -4427,7 +4608,7 @@ function App() {
 
   /* ── Render ── */
   return (
-    <div className="cora-shell">
+    <div className={`cora-shell ${deviceProfile.preferReducedEffects ? 'cora-low-effects' : ''}`}>
       {/* Mobile hamburger — only opens; close button is inside the sidebar */}
       {!sidebarOpen && (
         <button className="cora-mobile-toggle" onClick={() => setSidebarOpen(true)} aria-label="Open menu">
@@ -4607,6 +4788,7 @@ function App() {
                           driverOptions={driverOptions}
                           vehicles={vehicles}
                           categories={categories}
+                          deviceProfile={deviceProfile}
                         />
                       )}
                       {step === 3 && (
@@ -4614,9 +4796,9 @@ function App() {
                           signatureDataUrl={signatureDataUrl}
                           setSignatureDataUrl={setSignatureDataUrl}
                           beforePhotoFile={beforePhotoFile}
-                          setBeforePhotoFile={setBeforePhotoFile}
+                          setBeforePhotoFile={(file) => setProofPhoto('before', file)}
                           afterPhotoFile={afterPhotoFile}
-                          setAfterPhotoFile={setAfterPhotoFile}
+                          setAfterPhotoFile={(file) => setProofPhoto('after', file)}
                           beforePhotoPreviewUrl={beforePhotoPreviewUrl}
                           afterPhotoPreviewUrl={afterPhotoPreviewUrl}
                           busy={submitting}

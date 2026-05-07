@@ -1134,6 +1134,11 @@
 .cora-table-wrap tbody tr:hover td:first-child { box-shadow: inset 3px 0 0 var(--cora-green); }
 .cora-table-wrap tbody tr:last-child td { border-bottom: none; }
 
+.cora-pagination { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 0 0; color: var(--tx-muted); font-size: 0.78rem; min-width: 0; }
+.cora-pagination-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; min-width: 0; }
+.cora-pagination-actions .cora-btn { min-height: 36px; padding: 6px 12px; font-size: 0.7rem; }
+.cora-pagination-actions span { white-space: nowrap; }
+
 .cora-table-id { display: inline-flex; align-items: center; justify-content: center; min-width: 32px; padding: 2px 10px; background: var(--cora-green-muted); color: var(--cora-teal); font-size: 0.76rem; font-weight: 400; border-radius: 0; font-family: var(--f-display); letter-spacing: 0.5px; white-space: nowrap; }
 
 .cora-table-empty { padding: 56px 28px; text-align: center; color: var(--tx-muted); font-size: 0.88rem; display: flex; flex-direction: column; align-items: center; gap: 14px; }
@@ -1156,6 +1161,9 @@
   .cora-table-wrap tbody tr:hover td:first-child { box-shadow: none; }
   .cora-table-wrap td::before { content: attr(data-label); color: var(--tx-muted); font-family: var(--f-display); font-size: 0.72rem; font-weight: 400; text-transform: uppercase; letter-spacing: 1px; align-self: center; }
   .cora-table-empty { padding: 36px 18px; }
+  .cora-pagination { align-items: stretch; flex-direction: column; padding: 12px 14px 0; }
+  .cora-pagination-actions { justify-content: space-between; }
+  .cora-pagination-actions .cora-btn { flex: 1 1 0; }
 }
 
 @media (max-width: 380px) {
@@ -1314,6 +1322,27 @@
 .cora-admin-customer-modal { width: min(760px, 100%); }
 .cora-admin-customer-modal-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 @media (max-width: 640px) { .cora-admin-customer-modal-grid { grid-template-columns: 1fr; } }
+
+.cora-low-effects *,
+.cora-low-effects *::before,
+.cora-low-effects *::after {
+  animation-duration: 0.001ms !important;
+  animation-iteration-count: 1 !important;
+  scroll-behavior: auto !important;
+  transition-duration: 0.001ms !important;
+}
+
+.cora-low-effects .cora-sidebar-backdrop {
+  backdrop-filter: none;
+}
+
+.cora-low-effects .cora-table-wrap tbody tr {
+  animation: none;
+}
+
+.cora-low-effects .cora-step.completed::after {
+  animation: none;
+}
 
 /* ═══ SNF mock ═══ */
 .cora-snf-page { display: grid; gap: 20px; }

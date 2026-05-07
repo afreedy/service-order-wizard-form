@@ -164,20 +164,6 @@ const wrapRequest = <T>(request: IDBRequest<T>) =>
     request.onerror = () => reject(request.error ?? new Error('IndexedDB request failed.'))
   })
 
-const blobToDataUrl = (file: Blob | File) =>
-  new Promise<string>((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => {
-      if (typeof reader.result === 'string') {
-        resolve(reader.result)
-        return
-      }
-      reject(new Error('Could not prepare media for offline storage.'))
-    }
-    reader.onerror = () => reject(reader.error ?? new Error('Could not prepare media for offline storage.'))
-    reader.readAsDataURL(file)
-  })
-
 const dataUrlToBlob = async (dataUrl: string) => {
   const response = await fetch(dataUrl)
   return response.blob()
@@ -187,7 +173,7 @@ export const toStoredMediaFile = async (file: Blob | File | null | undefined, fa
   if (!file) return null
   const typedFile = file as File
   return {
-    dataUrl: await blobToDataUrl(file),
+    blob: file,
     name: typedFile.name || fallbackName,
     type: file.type || 'application/octet-stream',
     lastModified: typeof typedFile.lastModified === 'number' ? typedFile.lastModified : Date.now(),
