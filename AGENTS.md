@@ -31,6 +31,9 @@ npm run dev
 npm run build
 npm run lint
 npm run preview
+npm run test
+npm run test:watch
+npm run test:coverage
 ```
 
 Optional remote OCR endpoint during local development:
@@ -74,6 +77,7 @@ For small fixes:
 
 - Keep changes localized.
 - Run `npm run lint`.
+- Run `npm run test` when the change touches covered logic.
 - Run `npm run build` if types, imports, or data flow changed.
 
 For larger feature work:
@@ -84,11 +88,12 @@ For larger feature work:
 
 ## Testing Expectations
 
-There is no dedicated automated test suite in the repo today, so verification is mainly:
+The repo has a Vitest test suite with jsdom setup and coverage focused on `src/lib/**/*.ts`. Verification is mainly:
 
 - `npm run lint`
+- `npm run test`
 - `npm run build`
-- manual checks of the affected wizard/admin flow
+- manual checks of the affected wizard/admin flow when UI or Power Apps integration changes
 
 If you cannot run one of these checks, say so clearly in your handoff.
 

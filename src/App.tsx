@@ -59,10 +59,24 @@ const I = {
    Types
    ═══════════════════════════════════════════════════════ */
 type Load = 'loading' | 'loaded' | 'error'
-type View = 'form' | 'snf' | 'list' | 'admin'
+type View = 'form' | 'mindef' | 'snf' | 'list' | 'admin'
 type AdminTab = 'customers' | 'drivers' | 'vehicles' | 'waste'
 type ProtectedDestination = { view: 'list' } | { view: 'admin'; tab: AdminTab }
 type SubmissionMode = 'draft' | 'queued'
+type MindefForm = {
+  Customer: string
+  Location: string
+  SubLocation: string
+}
+type MindefPrefill = {
+  values: MindefForm
+  locked: Partial<Record<keyof MindefForm, boolean>>
+}
+type MindefSubmission = MindefForm & {
+  Tonnage: string
+  submittedAt: string
+  hadScalePhoto: boolean
+}
 type SnfStatus =
   | 'Submitted'
   | 'Pending HOD Approval'
@@ -74,15 +88,33 @@ type SnfStatus =
   | 'Flow Failed'
   | 'Cancelled'
 
+type SnfServiceLine = {
+  id: string
+  TypeOfService: string
+  ServiceFrequency: string
+  NoOfBins: string
+  BinType: string
+  Remarks: string
+}
+
 type SnfForm = {
+  NoticeType: string
   ContractNo: string
-  Customer: string
+  RequestDate: string
+  RequesterName: string
+  Department: string
+  Signature: string
+  Company: string
   ServiceAddress: string
-  ServiceDetails: string
-  ContractStartDate: string
+  ContactPerson: string
+  ContactNo: string
+  ServiceLines: SnfServiceLine[]
+  WasteTonnageReport: boolean
+  RecyclingTonnageReport: boolean
+  ServiceStartDate: string
+  ServiceCeaseDate: string
   ContractEndDate: string
-  ApprovalRoute: string
-  CreatedByName: string
+  Remarks: string
   CreatedByEmail: string
 }
 
@@ -159,18 +191,114 @@ const ADMIN_EMAILS = [
 const ADMIN_PASSCODE = 'CORA2026'
 const ADMIN_UNLOCK_STORAGE_KEY = 'cora-admin-unlocked'
 
-const SNF_APPROVAL_ROUTES = ['Sales HOD', 'BD HOD', 'Ops HOD', 'HSE'] as const
+const SNF_NOTICE_TYPES = ['NEW CONTRACT', 'RENEWAL', 'TERMINATION OF SERVICE', 'OTHERS'] as const
+const SNF_REQUESTER_NAMES = ['Josephine Darma', 'DAVID LIM', 'JESLIN NEO', 'SHEERMEEN', 'FABIAN LIM'] as const
+const SNF_SERVICE_TYPES = ['REL', 'CP', 'PN', 'RECYCLING'] as const
+const SNF_SERVICE_FREQUENCIES = [
+  'Daily',
+  'One Time',
+  'Daily (Include PH)',
+  'Mon to Sat (Exclude PH)',
+  'Mon to Fri (Exclude PH)',
+  'Fortnightly',
+  'Once-A-Week',
+  'Twice Weeky',
+  'Bi-Monthly',
+  'Once-A-Month',
+] as const
+const SNF_BIN_TYPES = [
+  '120L',
+  '240L',
+  '660L',
+  '240L Metal BP',
+  '660L Metal BP',
+  '120L Recycling',
+  '240L Recycling',
+  '660L Recycling',
+  'Smart Weighing Scale',
+] as const
+const toSelectOptions = (values: readonly string[]) => values.map((value) => ({ value, label: value }))
+let snfServiceLineId = 0
+const createSnfServiceLine = (): SnfServiceLine => ({
+  id: `snf-line-${++snfServiceLineId}`,
+  TypeOfService: '',
+  ServiceFrequency: '',
+  NoOfBins: '',
+  BinType: '',
+  Remarks: '',
+})
 const createEmptySnfForm = (): SnfForm => ({
+  NoticeType: 'NEW CONTRACT',
   ContractNo: 'Ad-hoc',
-  Customer: '',
+  RequestDate: formatDateInputValue(new Date()),
+  RequesterName: '',
+  Department: 'BD',
+  Signature: '',
+  Company: '',
   ServiceAddress: '',
-  ServiceDetails: '',
-  ContractStartDate: '',
+  ContactPerson: '',
+  ContactNo: '',
+  ServiceLines: [createSnfServiceLine()],
+  WasteTonnageReport: false,
+  RecyclingTonnageReport: false,
+  ServiceStartDate: '',
+  ServiceCeaseDate: '',
   ContractEndDate: '',
-  ApprovalRoute: 'Sales HOD',
-  CreatedByName: '',
+  Remarks: '',
   CreatedByEmail: '',
 })
+
+const isCompleteSnfServiceLine = (line: SnfServiceLine) => Boolean(
+  line.TypeOfService.trim()
+  && line.ServiceFrequency.trim()
+  && line.NoOfBins.trim()
+  && line.BinType.trim(),
+)
+
+const formatSnfServiceLine = (line: SnfServiceLine) => [
+  line.TypeOfService,
+  line.ServiceFrequency,
+  line.NoOfBins && line.BinType ? `${line.NoOfBins} x ${line.BinType}` : line.BinType || line.NoOfBins,
+].filter(Boolean).join(' - ')
+
+const createEmptyMindefForm = (): MindefForm => ({
+  Customer: '',
+  Location: '',
+  SubLocation: '',
+})
+
+const getMindefPrefillFromUrl = (): MindefPrefill => {
+  const params = new URLSearchParams(window.location.search)
+  return getMindefPrefillFromParams({
+    customer: params.get('customer') ?? undefined,
+    location: params.get('location') ?? undefined,
+    sublocation: params.get('sublocation') ?? undefined,
+  })
+}
+
+const getMindefPrefillFromParams = (params: Record<string, string | undefined>): MindefPrefill => {
+  const values = {
+    Customer: params.customer?.trim() ?? '',
+    Location: params.location?.trim() ?? '',
+    SubLocation: params.sublocation?.trim() ?? '',
+  }
+  return {
+    values,
+    locked: {
+      Customer: typeof params.customer === 'string',
+      Location: typeof params.location === 'string',
+      SubLocation: typeof params.sublocation === 'string',
+    },
+  }
+}
+
+const getInitialView = (): View => {
+  const viewParam = new URLSearchParams(window.location.search).get('view')
+  return viewParam === 'mindef' ? 'mindef' : 'form'
+}
+
+const formatMindefPath = (form: MindefForm) =>
+  [form.Customer, form.Location, form.SubLocation].filter((part) => part.trim()).join(' / ')
 
 const SNF_STATUS_STEPS: SnfStatus[] = [
   'Submitted',
@@ -1216,6 +1344,14 @@ function Sidebar({
             {I.plus} New Order
           </button>
           <button
+            className={`cora-nav-item ${view === 'mindef' ? 'active' : ''}`}
+            onClick={() => { onNav('mindef'); onClose() }}
+            id="nav-mindef"
+            aria-current={view === 'mindef' ? 'page' : undefined}
+          >
+            {I.mapPin} Mindef QR Mock
+          </button>
+          <button
             className={`cora-nav-item ${view === 'snf' ? 'active' : ''}`}
             onClick={() => { onNav('snf'); onClose() }}
             id="nav-snf"
@@ -1507,12 +1643,25 @@ function OrdersTable({ orders, loadState }: { orders: ServiceOrdersRead[]; loadS
 function SnfMockPage({ currentUserEmail }: { currentUserEmail: string }) {
   const [form, setForm] = useState<SnfForm>(() => ({
     ...createEmptySnfForm(),
-    CreatedByName: 'Josephine',
+    RequesterName: 'Josephine Darma',
     CreatedByEmail: currentUserEmail || 'josephine@cora-environment.com',
-    Customer: 'Semula Pte Ltd',
-    ServiceAddress: '153 Kampong Ampat #04-02 Jun Jie Industrial Building Singapore 368326',
-    ServiceDetails: 'One time recycling service. 1 jumbo bag delivery of HDPE and PP samples.',
-    ContractStartDate: new Date().toISOString().slice(0, 10),
+    Signature: 'Josephine',
+    Company: "L'occitane Singapore Pte Ltd",
+    ServiceAddress: '47 Jalan Buroh, #05-04, Bollore Logistics Singapore Pte Ltd, Singapore 619491',
+    ContactPerson: 'Vanessa Tan',
+    ContactNo: '',
+    WasteTonnageReport: true,
+    RecyclingTonnageReport: true,
+    ServiceStartDate: '2026-04-28',
+    Remarks: 'Please arrange for additional collection on 28 April 2026',
+    ServiceLines: [{
+      id: 'snf-sample-line',
+      TypeOfService: 'RECYCLING',
+      ServiceFrequency: 'One Time',
+      NoOfBins: '1',
+      BinType: '660L Recycling',
+      Remarks: 'Ad-hoc collection of recyclables',
+    }],
   }))
   const [requests, setRequests] = useState<SnfRequest[]>([
     {
@@ -1520,15 +1669,31 @@ function SnfMockPage({ currentUserEmail }: { currentUserEmail: string }) {
       ID: 1,
       Title: 'SNF-2026-0001',
       Status: 'Pending HOD Approval',
-      ApprovalRoute: 'Sales HOD',
-      CreatedByName: 'Josephine',
+      NoticeType: 'NEW CONTRACT',
+      RequestDate: '2026-04-24',
+      RequesterName: 'Josephine Darma',
       CreatedByEmail: 'josephine@cora-environment.com',
+      Department: 'BD',
+      Signature: 'Josephine',
       ContractNo: 'Ad-hoc',
-      Customer: 'Semula Pte Ltd',
-      ServiceAddress: '153 Kampong Ampat #04-02 Jun Jie Industrial Building Singapore 368326',
-      ServiceDetails: 'One time recycling service. 1 jumbo bag delivery of HDPE and PP samples.',
-      ContractStartDate: '2026-02-23',
+      Company: "L'occitane Singapore Pte Ltd",
+      ServiceAddress: '47 Jalan Buroh, #05-04, Bollore Logistics Singapore Pte Ltd, Singapore 619491',
+      ContactPerson: 'Vanessa Tan',
+      ContactNo: '',
+      ServiceLines: [{
+        id: 'snf-request-1-line',
+        TypeOfService: 'RECYCLING',
+        ServiceFrequency: 'One Time',
+        NoOfBins: '1',
+        BinType: '660L Recycling',
+        Remarks: 'Ad-hoc collection of recyclables',
+      }],
+      WasteTonnageReport: true,
+      RecyclingTonnageReport: true,
+      ServiceStartDate: '2026-04-28',
+      ServiceCeaseDate: '',
       ContractEndDate: '',
+      Remarks: 'Please arrange for additional collection on 28 April 2026',
       HodDecision: '',
       HodComments: '',
       BdOpsAcknowledgedBy: '',
@@ -1540,15 +1705,31 @@ function SnfMockPage({ currentUserEmail }: { currentUserEmail: string }) {
       ID: 2,
       Title: 'SNF-2026-0002',
       Status: 'Customer Added',
-      ApprovalRoute: 'BD HOD',
-      CreatedByName: 'Adeline Liu',
+      NoticeType: 'RENEWAL',
+      RequestDate: '2025-10-01',
+      RequesterName: 'JESLIN NEO',
       CreatedByEmail: 'adeline@cora-environment.com',
+      Department: 'BD',
+      Signature: 'Jeslin',
       ContractNo: 'MK/25/0115/01',
-      Customer: 'Methodist Welfare Services',
+      Company: 'Methodist Welfare Services',
       ServiceAddress: 'MWS Nursing Home - Eunos, 1A Chin Ching Avenue',
-      ServiceDetails: 'Daily REL collection. 4x660L bins with metal base.',
-      ContractStartDate: '2025-10-01',
+      ContactPerson: 'Operations Office',
+      ContactNo: '',
+      ServiceLines: [{
+        id: 'snf-request-2-line',
+        TypeOfService: 'REL',
+        ServiceFrequency: 'Daily',
+        NoOfBins: '4',
+        BinType: '660L',
+        Remarks: 'Bins with metal base',
+      }],
+      WasteTonnageReport: true,
+      RecyclingTonnageReport: false,
+      ServiceStartDate: '2025-10-01',
+      ServiceCeaseDate: '',
       ContractEndDate: '',
+      Remarks: '',
       HodDecision: 'Approved',
       HodComments: 'Approved for BD-Ops arrangement.',
       BdOpsAcknowledgedBy: 'BD-Ops',
@@ -1565,21 +1746,24 @@ function SnfMockPage({ currentUserEmail }: { currentUserEmail: string }) {
     if (!normalizedRequestSearch) return true
     return [
       request.Title,
-      request.Customer,
+      request.Company,
       request.Status,
-      request.ApprovalRoute,
+      request.NoticeType,
       request.ServiceAddress,
-      request.ServiceDetails,
-      request.CreatedByName,
+      request.RequesterName,
       request.CreatedByEmail,
+      request.ServiceLines.map(formatSnfServiceLine).join(' '),
     ].some((value) => normalizeAutocompleteText(value).includes(normalizedRequestSearch))
   })
   const selectedRequest = requests.find((request) => request.ID === selectedRequestId) ?? requests[0]
   const requiredComplete = Boolean(
-    form.Customer.trim()
+    form.NoticeType.trim()
+    && form.RequesterName.trim()
+    && form.Company.trim()
     && form.ServiceAddress.trim()
-    && form.ServiceDetails.trim()
-    && form.ApprovalRoute.trim(),
+    && form.ContactPerson.trim()
+    && form.ServiceStartDate.trim()
+    && form.ServiceLines.some(isCompleteSnfServiceLine),
   )
   const statusCounts = requests.reduce<Record<SnfStatus, number>>((acc, request) => {
     acc[request.Status] = (acc[request.Status] ?? 0) + 1
@@ -1588,6 +1772,30 @@ function SnfMockPage({ currentUserEmail }: { currentUserEmail: string }) {
 
   const updateForm = (key: keyof SnfForm, value: string) => {
     setForm((current) => ({ ...current, [key]: value }))
+  }
+
+  const updateFormBoolean = (key: 'WasteTonnageReport' | 'RecyclingTonnageReport', value: boolean) => {
+    setForm((current) => ({ ...current, [key]: value }))
+  }
+
+  const updateServiceLine = (id: string, key: keyof Omit<SnfServiceLine, 'id'>, value: string) => {
+    setForm((current) => ({
+      ...current,
+      ServiceLines: current.ServiceLines.map((line) => line.id === id ? { ...line, [key]: value } : line),
+    }))
+  }
+
+  const addServiceLine = () => {
+    setForm((current) => ({ ...current, ServiceLines: [...current.ServiceLines, createSnfServiceLine()] }))
+  }
+
+  const removeServiceLine = (id: string) => {
+    setForm((current) => ({
+      ...current,
+      ServiceLines: current.ServiceLines.length === 1
+        ? current.ServiceLines
+        : current.ServiceLines.filter((line) => line.id !== id),
+    }))
   }
 
   const updateRequest = (id: number, updater: (request: SnfRequest) => SnfRequest) => {
@@ -1612,9 +1820,11 @@ function SnfMockPage({ currentUserEmail }: { currentUserEmail: string }) {
     setSelectedRequestId(nextId)
     setForm({
       ...createEmptySnfForm(),
-      CreatedByName: form.CreatedByName,
+      RequesterName: form.RequesterName,
       CreatedByEmail: form.CreatedByEmail,
-      ApprovalRoute: form.ApprovalRoute,
+      Department: form.Department,
+      Signature: form.Signature,
+      NoticeType: form.NoticeType,
     })
   }
 
@@ -1678,14 +1888,61 @@ function SnfMockPage({ currentUserEmail }: { currentUserEmail: string }) {
               <p>HOD approval is not performed in this app screen. Power Automate sends the approval email, receives the decision, and updates the SNF status back in SharePoint.</p>
             </div>
             <div className="cora-form-grid">
-              <div className="cora-section-divider"><span>Request Origin</span></div>
+              <div className="cora-section-divider"><span>Request Details</span></div>
               <div className="cora-field">
-                <label className="cora-label" htmlFor="snf-created-by-name">Created by</label>
+                <label className="cora-label" htmlFor="snf-notice-type">Notice type <span className="req">*</span></label>
+                <CustomSelect
+                  id="snf-notice-type"
+                  value={form.NoticeType}
+                  onChange={(value) => updateForm('NoticeType', value)}
+                  options={toSelectOptions(SNF_NOTICE_TYPES)}
+                  searchable={false}
+                />
+              </div>
+              <div className="cora-field">
+                <label className="cora-label" htmlFor="snf-contract-no">Contract no</label>
                 <input
-                  id="snf-created-by-name"
+                  id="snf-contract-no"
                   className="cora-input"
-                  value={form.CreatedByName}
-                  onChange={(event) => updateForm('CreatedByName', event.target.value)}
+                  value={form.ContractNo}
+                  onChange={(event) => updateForm('ContractNo', event.target.value)}
+                  placeholder="Ad-hoc"
+                />
+              </div>
+              <div className="cora-field">
+                <label className="cora-label" htmlFor="snf-request-date">Request date</label>
+                <CustomDatePicker
+                  id="snf-request-date"
+                  value={form.RequestDate}
+                  onChange={(value) => updateForm('RequestDate', value)}
+                />
+              </div>
+              <div className="cora-field">
+                <label className="cora-label" htmlFor="snf-requester-name">Requester name <span className="req">*</span></label>
+                <CustomSelect
+                  id="snf-requester-name"
+                  value={form.RequesterName}
+                  onChange={(value) => updateForm('RequesterName', value)}
+                  options={toSelectOptions(SNF_REQUESTER_NAMES)}
+                  searchable={false}
+                />
+              </div>
+              <div className="cora-field">
+                <label className="cora-label" htmlFor="snf-department">Department</label>
+                <input
+                  id="snf-department"
+                  className="cora-input"
+                  value={form.Department}
+                  onChange={(event) => updateForm('Department', event.target.value)}
+                />
+              </div>
+              <div className="cora-field">
+                <label className="cora-label" htmlFor="snf-signature">Signature text</label>
+                <input
+                  id="snf-signature"
+                  className="cora-input"
+                  value={form.Signature}
+                  onChange={(event) => updateForm('Signature', event.target.value)}
                 />
               </div>
               <div className="cora-field">
@@ -1698,51 +1955,33 @@ function SnfMockPage({ currentUserEmail }: { currentUserEmail: string }) {
                 />
               </div>
 
-              <div className="cora-section-divider"><span>SNF Details</span></div>
+              <div className="cora-section-divider"><span>Company / Contact</span></div>
               <div className="cora-field">
-                <label className="cora-label" htmlFor="snf-contract-no">Contract no</label>
+                <label className="cora-label" htmlFor="snf-company">Company <span className="req">*</span></label>
                 <input
-                  id="snf-contract-no"
+                  id="snf-company"
                   className="cora-input"
-                  value={form.ContractNo}
-                  onChange={(event) => updateForm('ContractNo', event.target.value)}
-                  placeholder="Ad-hoc"
+                  value={form.Company}
+                  onChange={(event) => updateForm('Company', event.target.value)}
+                  placeholder="Company name"
                 />
               </div>
               <div className="cora-field">
-                <label className="cora-label" htmlFor="snf-approval-route">Approval route <span className="req">*</span></label>
-                <CustomSelect
-                  id="snf-approval-route"
-                  value={form.ApprovalRoute}
-                  onChange={(value) => updateForm('ApprovalRoute', value)}
-                  options={SNF_APPROVAL_ROUTES.map((route) => ({ value: route, label: route }))}
-                  searchable={false}
-                />
-              </div>
-              <div className="cora-field">
-                <label className="cora-label" htmlFor="snf-customer">Customer <span className="req">*</span></label>
+                <label className="cora-label" htmlFor="snf-contact-person">Contact person <span className="req">*</span></label>
                 <input
-                  id="snf-customer"
+                  id="snf-contact-person"
                   className="cora-input"
-                  value={form.Customer}
-                  onChange={(event) => updateForm('Customer', event.target.value)}
-                  placeholder="Customer or company name"
+                  value={form.ContactPerson}
+                  onChange={(event) => updateForm('ContactPerson', event.target.value)}
                 />
               </div>
               <div className="cora-field">
-                <label className="cora-label" htmlFor="snf-start-date">Contract start</label>
-                <CustomDatePicker
-                  id="snf-start-date"
-                  value={form.ContractStartDate}
-                  onChange={(value) => updateForm('ContractStartDate', value)}
-                />
-              </div>
-              <div className="cora-field">
-                <label className="cora-label" htmlFor="snf-end-date">Contract end</label>
-                <CustomDatePicker
-                  id="snf-end-date"
-                  value={form.ContractEndDate}
-                  onChange={(value) => updateForm('ContractEndDate', value)}
+                <label className="cora-label" htmlFor="snf-contact-no">Contact no</label>
+                <input
+                  id="snf-contact-no"
+                  className="cora-input"
+                  value={form.ContactNo}
+                  onChange={(event) => updateForm('ContactNo', event.target.value)}
                 />
               </div>
               <div className="cora-field span">
@@ -1755,14 +1994,144 @@ function SnfMockPage({ currentUserEmail }: { currentUserEmail: string }) {
                   placeholder="Full service address"
                 />
               </div>
+
+              <div className="cora-section-divider"><span>Services</span></div>
               <div className="cora-field span">
-                <label className="cora-label" htmlFor="snf-service-details">Service details <span className="req">*</span></label>
+                <div className="cora-snf-service-lines">
+                  {form.ServiceLines.map((line, index) => (
+                    <div className="cora-snf-service-line" key={line.id}>
+                      <div className="cora-snf-service-line-head">
+                        <strong>Service line {index + 1}</strong>
+                        {form.ServiceLines.length > 1 && (
+                          <button
+                            className="cora-btn-icon"
+                            type="button"
+                            onClick={() => removeServiceLine(line.id)}
+                            aria-label={`Remove service line ${index + 1}`}
+                            title={`Remove service line ${index + 1}`}
+                          >
+                            {I.trash}
+                          </button>
+                        )}
+                      </div>
+                      <div className="cora-snf-service-line-grid">
+                        <div className="cora-field">
+                          <label className="cora-label" htmlFor={`snf-service-type-${line.id}`}>Type of service <span className="req">*</span></label>
+                          <CustomSelect
+                            id={`snf-service-type-${line.id}`}
+                            value={line.TypeOfService}
+                            onChange={(value) => updateServiceLine(line.id, 'TypeOfService', value)}
+                            options={toSelectOptions(SNF_SERVICE_TYPES)}
+                            searchable={false}
+                          />
+                        </div>
+                        <div className="cora-field">
+                          <label className="cora-label" htmlFor={`snf-service-frequency-${line.id}`}>Service frequency <span className="req">*</span></label>
+                          <CustomSelect
+                            id={`snf-service-frequency-${line.id}`}
+                            value={line.ServiceFrequency}
+                            onChange={(value) => updateServiceLine(line.id, 'ServiceFrequency', value)}
+                            options={toSelectOptions(SNF_SERVICE_FREQUENCIES)}
+                            searchable={false}
+                          />
+                        </div>
+                        <div className="cora-field">
+                          <label className="cora-label" htmlFor={`snf-no-of-bins-${line.id}`}>No. of bins <span className="req">*</span></label>
+                          <input
+                            id={`snf-no-of-bins-${line.id}`}
+                            className="cora-input"
+                            value={line.NoOfBins}
+                            onChange={(event) => updateServiceLine(line.id, 'NoOfBins', event.target.value)}
+                            inputMode="numeric"
+                          />
+                        </div>
+                        <div className="cora-field">
+                          <label className="cora-label" htmlFor={`snf-bin-type-${line.id}`}>Bin type <span className="req">*</span></label>
+                          <CustomSelect
+                            id={`snf-bin-type-${line.id}`}
+                            value={line.BinType}
+                            onChange={(value) => updateServiceLine(line.id, 'BinType', value)}
+                            options={toSelectOptions(SNF_BIN_TYPES)}
+                            searchable={false}
+                          />
+                        </div>
+                        <div className="cora-field span">
+                          <label className="cora-label" htmlFor={`snf-service-remarks-${line.id}`}>Service remarks</label>
+                          <input
+                            id={`snf-service-remarks-${line.id}`}
+                            className="cora-input"
+                            value={line.Remarks}
+                            onChange={(event) => updateServiceLine(line.id, 'Remarks', event.target.value)}
+                            placeholder="Remarks for this service line"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                  <button className="cora-btn cora-btn-outline" type="button" onClick={addServiceLine}>
+                    {I.plus} Add service line
+                  </button>
+                </div>
+              </div>
+
+              <div className="cora-section-divider"><span>Reports / Dates</span></div>
+              <div className="cora-field">
+                <label className="cora-label">Monthly tonnage reports</label>
+                <div className="cora-snf-report-switches">
+                  <button
+                    className={`cora-switch ${form.WasteTonnageReport ? 'on' : ''}`}
+                    type="button"
+                    role="switch"
+                    aria-checked={form.WasteTonnageReport}
+                    aria-label="Waste tonnage report"
+                    onClick={() => updateFormBoolean('WasteTonnageReport', !form.WasteTonnageReport)}
+                  />
+                  <span className="cora-switch-label">Waste tonnage report</span>
+                  <button
+                    className={`cora-switch ${form.RecyclingTonnageReport ? 'on' : ''}`}
+                    type="button"
+                    role="switch"
+                    aria-checked={form.RecyclingTonnageReport}
+                    aria-label="Recycling tonnage report"
+                    onClick={() => updateFormBoolean('RecyclingTonnageReport', !form.RecyclingTonnageReport)}
+                  />
+                  <span className="cora-switch-label">Recycling tonnage report</span>
+                </div>
+              </div>
+              <div className="cora-field">
+                <label className="cora-label" htmlFor="snf-service-start-date">Service start date <span className="req">*</span></label>
+                <CustomDatePicker
+                  id="snf-service-start-date"
+                  value={form.ServiceStartDate}
+                  onChange={(value) => updateForm('ServiceStartDate', value)}
+                />
+              </div>
+              <div className="cora-field">
+                <label className="cora-label" htmlFor="snf-service-cease-date">Service cease date</label>
+                <CustomDatePicker
+                  id="snf-service-cease-date"
+                  value={form.ServiceCeaseDate}
+                  onChange={(value) => updateForm('ServiceCeaseDate', value)}
+                />
+              </div>
+              <div className="cora-field">
+                <label className="cora-label" htmlFor="snf-contract-end-date">Contract end date</label>
+                <CustomDatePicker
+                  id="snf-contract-end-date"
+                  value={form.ContractEndDate}
+                  onChange={(value) => updateForm('ContractEndDate', value)}
+                />
+              </div>
+
+              <div className="cora-section-divider"><span>Remarks</span></div>
+              <div className="cora-field span">
+                <label className="cora-label" htmlFor="snf-remarks">Remarks</label>
                 <textarea
-                  id="snf-service-details"
+                  id="snf-remarks"
                   className="cora-textarea cora-snf-service-details"
-                  value={form.ServiceDetails}
-                  onChange={(event) => updateForm('ServiceDetails', event.target.value)}
-                  placeholder="Scope, frequency, bins, tonnage reports, remarks"
+                  value={form.Remarks}
+                  onChange={(event) => updateForm('Remarks', event.target.value)}
+                  placeholder="Additional notes for BD-Ops or downstream setup"
                 />
               </div>
             </div>
@@ -1801,7 +2170,7 @@ function SnfMockPage({ currentUserEmail }: { currentUserEmail: string }) {
                 >
                   <span>
                     <strong>{request.Title}</strong>
-                    <small>{request.Customer}</small>
+                    <small>{request.Company}</small>
                   </span>
                   <em className={`cora-snf-status is-${request.Status.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`}>{request.Status}</em>
                 </button>
@@ -1819,7 +2188,7 @@ function SnfMockPage({ currentUserEmail }: { currentUserEmail: string }) {
             <section className="cora-card cora-snf-selected-card">
               <div className="cora-card-head">
                 <span className="cora-card-title">{selectedRequest.Title}</span>
-                <span className="cora-card-badge">{selectedRequest.ApprovalRoute}</span>
+                <span className="cora-card-badge">{selectedRequest.NoticeType}</span>
               </div>
               <div className="cora-card-body">
                 <div className="cora-snf-flow">
@@ -1834,9 +2203,12 @@ function SnfMockPage({ currentUserEmail }: { currentUserEmail: string }) {
                   ))}
                 </div>
                 <div className="cora-snf-summary">
-                  <p><strong>Customer</strong><span>{selectedRequest.Customer}</span></p>
+                  <p><strong>Company</strong><span>{selectedRequest.Company}</span></p>
+                  <p><strong>Contact</strong><span>{selectedRequest.ContactPerson || '—'}{selectedRequest.ContactNo ? `, ${selectedRequest.ContactNo}` : ''}</span></p>
                   <p><strong>Address</strong><span>{selectedRequest.ServiceAddress}</span></p>
-                  <p><strong>Service</strong><span>{selectedRequest.ServiceDetails}</span></p>
+                  <p><strong>Service</strong><span>{selectedRequest.ServiceLines.map(formatSnfServiceLine).filter(Boolean).join('; ') || '—'}</span></p>
+                  <p><strong>Start date</strong><span>{selectedRequest.ServiceStartDate || '—'}</span></p>
+                  {selectedRequest.Remarks && <p><strong>Remarks</strong><span>{selectedRequest.Remarks}</span></p>}
                   {selectedRequest.CustomerListItemId && <p><strong>Customer row</strong><span>#{selectedRequest.CustomerListItemId}</span></p>}
                 </div>
                 <div className="cora-field">
@@ -1890,6 +2262,373 @@ function SnfMockPage({ currentUserEmail }: { currentUserEmail: string }) {
           )}
         </aside>
       </div>
+    </div>
+  )
+}
+
+function MindefMockPage({
+  prefill, deviceProfile,
+}: {
+  prefill: MindefPrefill
+  deviceProfile: DevicePerformanceProfile
+}) {
+  const [form, setForm] = useState<MindefForm>(() => ({
+    ...createEmptyMindefForm(),
+    ...prefill.values,
+  }))
+  const [line, setLine] = useState<WasteLine>(() => createWasteLine())
+  const [cropEditing, setCropEditing] = useState(false)
+  const [submission, setSubmission] = useState<MindefSubmission | null>(null)
+  const scalePhotoRequestIdRef = useRef('')
+
+  useEffect(() => {
+    setForm((current) => ({
+      Customer: prefill.locked.Customer ? prefill.values.Customer : current.Customer,
+      Location: prefill.locked.Location ? prefill.values.Location : current.Location,
+      SubLocation: prefill.locked.SubLocation ? prefill.values.SubLocation : current.SubLocation,
+    }))
+  }, [prefill])
+
+  useEffect(() => () => {
+    revokeObjectPreviewUrl(line.scalePhotoPreviewUrl)
+  }, [line.scalePhotoPreviewUrl])
+
+  const updateField = (key: keyof MindefForm, value: string) => {
+    setForm((current) => ({ ...current, [key]: value }))
+    setSubmission(null)
+  }
+
+  const updateLine = (changes: Partial<Omit<WasteLine, 'id'>>) => {
+    setLine((current) => ({ ...current, ...changes }))
+    setSubmission(null)
+  }
+
+  const clearScalePhoto = () => {
+    scalePhotoRequestIdRef.current = `cleared-${Date.now()}`
+    setLine((current) => {
+      revokeObjectPreviewUrl(current.scalePhotoPreviewUrl)
+      return {
+        ...current,
+        scalePhotoFile: undefined,
+        scalePhotoPreviewUrl: undefined,
+        scaleOcrCropPreviewUrl: undefined,
+        scaleOcrCrop: undefined,
+        scaleOcrStatus: 'idle',
+        scaleOcrText: undefined,
+        scaleOcrSuggestion: undefined,
+        scaleOcrConfidence: undefined,
+        scaleOcrReasons: undefined,
+        scaleOcrError: undefined,
+        scaleOcrRequestId: undefined,
+      }
+    })
+    setSubmission(null)
+  }
+
+  const runOcr = async (imageSource: string, requestId: string, crop?: CropRect) => {
+    try {
+      const preprocessed = await preprocessImageForOcr(imageSource, crop, {
+        maxImageSide: deviceProfile.maxOcrImageSide,
+        maxVariants: deviceProfile.maxOcrVariants,
+      })
+      const result = await runWeightOcr(preprocessed.imageDataUrls, preprocessed.candidateTexts, {
+        remoteImageDataUrl: preprocessed.cropPreviewUrl,
+      })
+      const suggestion = result.reliable ? result.parsed.suggestion : ''
+      setLine((current) => {
+        if (current.scaleOcrRequestId !== requestId) return current
+        return {
+          ...current,
+          scaleOcrStatus: suggestion ? 'done' : 'error',
+          scaleOcrText: result.rawText,
+          scaleOcrSuggestion: suggestion || undefined,
+          scaleOcrConfidence: suggestion ? result.confidence : undefined,
+          scaleOcrReasons: result.reasons,
+          scaleOcrError: suggestion ? undefined : 'Could not confidently read weight. Enter manually.',
+          scaleOcrCropPreviewUrl: preprocessed.cropPreviewUrl,
+          scaleOcrCrop: preprocessed.cropRect,
+        }
+      })
+    } catch (error) {
+      setLine((current) => {
+        if (current.scaleOcrRequestId !== requestId) return current
+        return {
+          ...current,
+          scaleOcrStatus: 'error',
+          scaleOcrConfidence: undefined,
+          scaleOcrReasons: undefined,
+          scaleOcrError: error instanceof Error ? error.message : 'Could not read weight. Enter manually.',
+        }
+      })
+    }
+  }
+
+  const handleScalePhotoChange = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0] ?? null
+    event.target.value = ''
+    if (!file) return
+    if (!file.type.startsWith('image/')) {
+      updateLine({
+        scaleOcrStatus: 'error',
+        scaleOcrText: undefined,
+        scaleOcrSuggestion: undefined,
+        scaleOcrConfidence: undefined,
+        scaleOcrReasons: undefined,
+        scaleOcrError: 'Choose an image file.',
+      })
+      return
+    }
+
+    const requestId = `mindef-scale-ocr-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    scalePhotoRequestIdRef.current = requestId
+    try {
+      const preparedFile = await resizeImageFile(file, deviceProfile.maxOcrImageSide, deviceProfile.isLowResourceMode ? 0.68 : 0.76)
+        .catch(() => file)
+      if (scalePhotoRequestIdRef.current !== requestId) return
+      const previewUrl = await fileToDataUrl(preparedFile)
+      setLine((current) => {
+        revokeObjectPreviewUrl(current.scalePhotoPreviewUrl)
+        return {
+          ...current,
+          scalePhotoFile: preparedFile,
+          scalePhotoPreviewUrl: previewUrl,
+          scaleOcrStatus: 'idle',
+          scaleOcrText: undefined,
+          scaleOcrSuggestion: undefined,
+          scaleOcrConfidence: undefined,
+          scaleOcrReasons: undefined,
+          scaleOcrError: undefined,
+          scaleOcrCropPreviewUrl: undefined,
+          scaleOcrCrop: undefined,
+          scaleOcrRequestId: requestId,
+        }
+      })
+      setCropEditing(true)
+    } catch (error) {
+      if (scalePhotoRequestIdRef.current !== requestId) return
+      updateLine({
+        scaleOcrStatus: 'error',
+        scaleOcrText: undefined,
+        scaleOcrSuggestion: undefined,
+        scaleOcrConfidence: undefined,
+        scaleOcrReasons: undefined,
+        scaleOcrError: error instanceof Error ? error.message : 'Could not prepare image preview.',
+      })
+    }
+  }
+
+  const applyCrop = (crop: CropRect) => {
+    if (!line.scalePhotoPreviewUrl) return
+    const requestId = `mindef-scale-ocr-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    setCropEditing(false)
+    setLine((current) => ({
+      ...current,
+      scaleOcrStatus: 'reading',
+      scaleOcrText: undefined,
+      scaleOcrSuggestion: undefined,
+      scaleOcrConfidence: undefined,
+      scaleOcrReasons: undefined,
+      scaleOcrError: undefined,
+      scaleOcrRequestId: requestId,
+      scaleOcrCrop: crop,
+    }))
+    void runOcr(line.scalePhotoPreviewUrl, requestId, crop)
+  }
+
+  const applySuggestion = () => {
+    if (!line.scaleOcrSuggestion) return
+    updateLine({
+      Tonnage: line.scaleOcrSuggestion,
+      scaleOcrStatus: 'idle',
+      scaleOcrSuggestion: undefined,
+      scaleOcrConfidence: undefined,
+      scaleOcrReasons: undefined,
+      scaleOcrError: undefined,
+    })
+  }
+
+  const tonnage = Number(line.Tonnage)
+  const canSubmit = Boolean(
+    form.Customer.trim()
+    && form.Location.trim()
+    && form.SubLocation.trim()
+    && line.Tonnage.trim() !== ''
+    && Number.isFinite(tonnage)
+    && tonnage >= 0,
+  )
+
+  const submitMock = () => {
+    if (!canSubmit) return
+    setSubmission({
+      ...form,
+      Tonnage: line.Tonnage,
+      submittedAt: new Date().toISOString(),
+      hadScalePhoto: Boolean(line.scalePhotoFile),
+    })
+  }
+
+  return (
+    <div className="cora-mindef-layout">
+      {cropEditing && line.scalePhotoPreviewUrl && (
+        <CropAdjustModal
+          imageUrl={line.scalePhotoPreviewUrl}
+          initialCrop={line.scaleOcrCrop}
+          onCancel={() => setCropEditing(false)}
+          onApply={applyCrop}
+        />
+      )}
+
+      <section className="cora-card cora-mindef-card">
+        <div className="cora-card-head">
+          <span className="cora-card-title">Collection Point</span>
+          <span className="cora-card-badge">MOCK</span>
+        </div>
+        <div className="cora-card-body">
+          <div className="cora-form-grid">
+            <div className="cora-field">
+              <label className="cora-label" htmlFor="mindef-customer">Customer</label>
+              <input
+                id="mindef-customer"
+                className="cora-input"
+                value={form.Customer}
+                onChange={(event) => updateField('Customer', event.target.value)}
+                readOnly={Boolean(prefill.locked.Customer)}
+                placeholder="Mindef"
+              />
+            </div>
+            <div className="cora-field">
+              <label className="cora-label" htmlFor="mindef-location">Location</label>
+              <input
+                id="mindef-location"
+                className="cora-input"
+                value={form.Location}
+                onChange={(event) => updateField('Location', event.target.value)}
+                readOnly={Boolean(prefill.locked.Location)}
+                placeholder="Kranji Camp"
+              />
+            </div>
+            <div className="cora-field">
+              <label className="cora-label" htmlFor="mindef-sublocation">Sub-location</label>
+              <input
+                id="mindef-sublocation"
+                className="cora-input"
+                value={form.SubLocation}
+                onChange={(event) => updateField('SubLocation', event.target.value)}
+                readOnly={Boolean(prefill.locked.SubLocation)}
+                placeholder="Cookhouse 1"
+              />
+            </div>
+            <div className="cora-field">
+              <label className="cora-label" htmlFor="mindef-tonnage">Tonnage</label>
+              <input
+                id="mindef-tonnage"
+                className="cora-input"
+                type="number"
+                min="0"
+                step="0.01"
+                inputMode="decimal"
+                value={line.Tonnage}
+                onChange={(event) => updateLine({ Tonnage: event.target.value })}
+                placeholder="e.g. 12.5"
+              />
+            </div>
+
+            <div className="cora-field span cora-scale-ocr cora-mindef-scale">
+              <label className="cora-label" htmlFor="mindef-scale-photo">Scale photo</label>
+              {line.scalePhotoPreviewUrl && (
+                <img className="cora-scale-preview" src={line.scalePhotoPreviewUrl} alt="Mindef scale preview" />
+              )}
+              {line.scaleOcrCropPreviewUrl && (
+                <div className="cora-scale-crop-preview">
+                  <span>OCR crop preview</span>
+                  <img src={line.scaleOcrCropPreviewUrl} alt="Mindef OCR crop preview" />
+                </div>
+              )}
+              <div className="cora-scale-actions">
+                <label className="cora-btn cora-btn-secondary" htmlFor="mindef-scale-photo">
+                  {line.scalePhotoPreviewUrl ? 'Replace scale photo' : 'Take or choose scale photo'}
+                </label>
+                {line.scalePhotoPreviewUrl && (
+                  <button className="cora-btn cora-btn-outline" type="button" onClick={() => setCropEditing(true)}>
+                    Adjust crop
+                  </button>
+                )}
+                {line.scalePhotoPreviewUrl && (
+                  <button className="cora-btn cora-btn-outline" type="button" onClick={clearScalePhoto}>
+                    Clear
+                  </button>
+                )}
+              </div>
+              <input
+                id="mindef-scale-photo"
+                className="cora-file-input"
+                type="file"
+                accept="image/*"
+                capture="environment"
+                onChange={(event) => void handleScalePhotoChange(event)}
+              />
+              {line.scaleOcrStatus === 'reading' && <p className="cora-scale-status reading">Reading scale...</p>}
+              {line.scalePhotoPreviewUrl && line.scaleOcrStatus === 'idle' && (
+                <p className="cora-scale-status reading">Adjust the crop to read the scale.</p>
+              )}
+              {line.scaleOcrStatus === 'done' && line.scaleOcrSuggestion && (
+                <div className="cora-scale-suggestion">
+                  <p className="cora-scale-status done">
+                    Detected: {line.scaleOcrSuggestion}
+                    {typeof line.scaleOcrConfidence === 'number' ? ` (${Math.round(line.scaleOcrConfidence)}% confidence)` : ''}
+                  </p>
+                  {line.scaleOcrReasons && line.scaleOcrReasons.length > 0 && (
+                    <p className="cora-scale-status reading">{line.scaleOcrReasons.join('. ')}.</p>
+                  )}
+                  <button
+                    className="cora-btn cora-btn-primary"
+                    type="button"
+                    onClick={applySuggestion}
+                    disabled={line.Tonnage === line.scaleOcrSuggestion}
+                  >
+                    Use detected value
+                  </button>
+                </div>
+              )}
+              {line.scaleOcrStatus === 'error' && (
+                <p className="cora-scale-status error">{line.scaleOcrError || 'Could not read weight. Enter manually.'}</p>
+              )}
+              {line.scaleOcrText && (
+                <details className="cora-scale-raw">
+                  <summary>OCR text</summary>
+                  <pre>{line.scaleOcrText}</pre>
+                </details>
+              )}
+            </div>
+          </div>
+        </div>
+        <div className="cora-card-foot">
+          <button className="cora-btn cora-btn-primary" type="button" onClick={submitMock} disabled={!canSubmit}>
+            {I.check} Submit Mock
+          </button>
+        </div>
+      </section>
+
+      {submission && (
+        <section className="cora-card cora-mindef-summary-card" aria-live="polite">
+          <div className="cora-card-head">
+            <span className="cora-card-title">Mindef Mock Submitted</span>
+            <span className="cora-card-badge">LOCAL ONLY</span>
+          </div>
+          <div className="cora-card-body">
+            <div className="cora-success-panel cora-mindef-success">
+              <div className="cora-success-icon">{I.check}</div>
+              <h2>Mindef Mock Submitted</h2>
+              <p>{formatMindefPath(submission)}</p>
+              <div className="cora-mindef-summary">
+                <p><strong>Tonnage</strong><span>{submission.Tonnage} kg</span></p>
+                <p><strong>Photo</strong><span>{submission.hadScalePhoto ? 'Attached for OCR preview' : 'Not attached'}</span></p>
+                <p><strong>Submitted</strong><span>{new Date(submission.submittedAt).toLocaleString()}</span></p>
+              </div>
+            </div>
+          </div>
+        </section>
+      )}
     </div>
   )
 }
@@ -3696,7 +4435,7 @@ function StepReview({
    ═══════════════════════════════════════════════════════ */
 function App() {
   /* ── State ── */
-  const [view, setView] = useState<View>('form')
+  const [view, setView] = useState<View>(() => getInitialView())
   const [adminTab, setAdminTab] = useState<AdminTab>('drivers')
   const [currentUserEmail, setCurrentUserEmail] = useState('')
   const [adminPasscodeOpen, setAdminPasscodeOpen] = useState(false)
@@ -3736,6 +4475,7 @@ function App() {
   const [queueLastError, setQueueLastError] = useState('')
   const [queueSyncing, setQueueSyncing] = useState(false)
   const [deviceProfile, setDeviceProfile] = useState(() => getDevicePerformanceProfile())
+  const [mindefPrefill, setMindefPrefill] = useState<MindefPrefill>(() => getMindefPrefillFromUrl())
 
   useEffect(() => {
     const updateProfile = () => setDeviceProfile(getDevicePerformanceProfile())
@@ -3916,7 +4656,13 @@ function App() {
     let cancelled = false
     getContext()
       .then((context) => {
-        if (!cancelled) setCurrentUserEmail(context.user.userPrincipalName?.toLowerCase() || '')
+        if (cancelled) return
+        setCurrentUserEmail(context.user.userPrincipalName?.toLowerCase() || '')
+        const queryParams = context.app?.queryParams ?? {}
+        if (queryParams.view === 'mindef') {
+          setMindefPrefill(getMindefPrefillFromParams(queryParams))
+          setView('mindef')
+        }
       })
       .catch(() => {
         if (!cancelled) setCurrentUserEmail('')
@@ -4579,6 +5325,8 @@ function App() {
   }
   const breadcrumbCurrentLabel = view === 'form'
     ? 'New Service Order'
+    : view === 'mindef'
+      ? 'Mindef QR Mock'
     : view === 'snf'
       ? 'SNF Mock'
     : view === 'admin'
@@ -4586,6 +5334,8 @@ function App() {
       : 'All Orders'
   const pageTitle = view === 'form'
     ? 'Create Service Order'
+    : view === 'mindef'
+      ? 'Mindef QR Mock'
     : view === 'snf'
       ? 'Create SNF'
     : view === 'admin'
@@ -4593,6 +5343,8 @@ function App() {
       : 'Service Orders'
   const pageDescription = view === 'form'
     ? 'Complete the guided flow below to create a new service order from any device.'
+    : view === 'mindef'
+      ? 'Single-page QR mock with prefilled collection point details and live OCR-assisted tonnage.'
     : view === 'snf'
       ? 'Mock the Service Notice Form submission, HOD approval, BD-Ops acknowledgement, and customer creation flow.'
     : view === 'admin'
@@ -4673,7 +5425,7 @@ function App() {
             <p>{pageDescription}</p>
           </div>
 
-          {view !== 'snf' && <div className={`cora-sync-banner is-${syncStatus}`} role="status" aria-live="polite">
+          {view !== 'snf' && view !== 'mindef' && <div className={`cora-sync-banner is-${syncStatus}`} role="status" aria-live="polite">
             <div className="cora-sync-banner-main">
               <span className="cora-sync-banner-badge">{syncHeadline}</span>
               <strong>{syncBody}</strong>
@@ -4701,6 +5453,13 @@ function App() {
           {view === 'list' && isAdmin && adminUnlocked && <OrdersTable orders={orders} loadState={loadState} />}
 
           {view === 'snf' && <SnfMockPage currentUserEmail={currentUserEmail} />}
+
+          {view === 'mindef' && (
+            <MindefMockPage
+              prefill={mindefPrefill}
+              deviceProfile={deviceProfile}
+            />
+          )}
 
           {view === 'admin' && isAdmin && adminUnlocked && (
             <AdminReferencePage

@@ -74,6 +74,7 @@ describe('App', () => {
     vi.resetModules()
     vi.clearAllMocks()
     sessionStorage.clear()
+    window.history.pushState({}, '', '/')
     HTMLElement.prototype.scrollIntoView = vi.fn()
 
     getContext.mockResolvedValue({ user: { userPrincipalName: 'operator@cora-environment.com' } })
@@ -278,4 +279,155 @@ describe('App', () => {
     expect(screen.getByText('SO-001')).toBeInTheDocument()
     expect(screen.queryByText('SO-002')).not.toBeInTheDocument()
   })
+
+  it('opens the Mindef QR mock from the sidebar', async () => {
+    const user = userEvent.setup()
+    const { default: App } = await import('./App')
+
+    render(<App />)
+
+    await screen.findByRole('heading', { name: 'Create Service Order' })
+    await user.click(screen.getByRole('button', { name: /Mindef QR Mock/i }))
+
+    expect(await screen.findByRole('heading', { name: 'Mindef QR Mock' })).toBeInTheDocument()
+    expect(screen.getByLabelText('Customer')).toHaveValue('')
+    expect(screen.getByLabelText('Location')).toHaveValue('')
+    expect(screen.getByLabelText('Sub-location')).toHaveValue('')
+  })
+
+  it('prefills the Mindef mock from QR URL parameters as read-only values', async () => {
+    window.history.pushState(
+      {},
+      '',
+      '/?view=mindef&customer=Mindef&location=Kranji%20Camp&sublocation=Cookhouse%201',
+    )
+    const { default: App } = await import('./App')
+
+    render(<App />)
+
+    expect(await screen.findByRole('heading', { name: 'Mindef QR Mock' })).toBeInTheDocument()
+    expect(screen.getByLabelText('Customer')).toHaveValue('Mindef')
+    expect(screen.getByLabelText('Location')).toHaveValue('Kranji Camp')
+    expect(screen.getByLabelText('Sub-location')).toHaveValue('Cookhouse 1')
+    expect(screen.getByLabelText('Customer')).toHaveAttribute('readonly')
+    expect(screen.getByLabelText('Location')).toHaveAttribute('readonly')
+    expect(screen.getByLabelText('Sub-location')).toHaveAttribute('readonly')
+  })
+
+  it('prefills the Mindef mock from Power Apps context query parameters', async () => {
+    getContext.mockResolvedValue({
+      user: { userPrincipalName: 'operator@cora-environment.com' },
+      app: {
+        queryParams: {
+          view: 'mindef',
+          customer: 'Mindef',
+          location: 'Kranji Camp',
+          sublocation: 'Cookhouse 1',
+        },
+      },
+    })
+    const { default: App } = await import('./App')
+
+    render(<App />)
+
+    expect(await screen.findByRole('heading', { name: 'Mindef QR Mock' })).toBeInTheDocument()
+    expect(screen.getByLabelText('Customer')).toHaveValue('Mindef')
+    expect(screen.getByLabelText('Location')).toHaveValue('Kranji Camp')
+    expect(screen.getByLabelText('Sub-location')).toHaveValue('Cookhouse 1')
+  })
+
+  it('submits the Mindef mock locally without queueing or SharePoint writes', async () => {
+    const user = userEvent.setup()
+    window.history.pushState(
+      {},
+      '',
+      '/?view=mindef&customer=Mindef&location=Kranji%20Camp&sublocation=Cookhouse%201',
+    )
+    const { default: App } = await import('./App')
+
+    render(<App />)
+
+    await screen.findByRole('heading', { name: 'Mindef QR Mock' })
+    await user.type(screen.getByLabelText('Tonnage'), '12.5')
+
+    enqueueSubmission.mockClear()
+    processPendingQueue.mockClear()
+    await user.click(screen.getByRole('button', { name: /Submit Mock/i }))
+
+    expect(await screen.findByRole('heading', { name: 'Mindef Mock Submitted' })).toBeInTheDocument()
+    expect(screen.getByText('Mindef / Kranji Camp / Cookhouse 1')).toBeInTheDocument()
+    expect(screen.getByText('12.5 kg')).toBeInTheDocument()
+    expect(enqueueSubmission).not.toHaveBeenCalled()
+    expect(processPendingQueue).not.toHaveBeenCalled()
+  })
+
+  it('renders Excel-backed SNF fields and dropdown values', async () => {
+    const user = userEvent.setup()
+    const { default: App } = await import('./App')
+
+    render(<App />)
+
+    await screen.findByRole('heading', { name: 'Create Service Order' })
+    await user.click(screen.getByRole('button', { name: /SNF Mock/i }))
+    await screen.findByRole('heading', { name: 'Create SNF' })
+
+    expect(screen.getByLabelText(/Notice type/i)).toBeInTheDocument()
+    expect(screen.getByLabelText(/Company/i)).toBeInTheDocument()
+    expect(screen.getByLabelText(/Contact person/i)).toBeInTheDocument()
+    expect(screen.getByLabelText(/Service start date/i)).toBeInTheDocument()
+
+    await user.click(screen.getByRole('combobox', { name: /Notice type/i }))
+    expect(await screen.findByRole('option', { name: 'NEW CONTRACT' })).toBeInTheDocument()
+    expect(screen.getByRole('option', { name: 'RENEWAL' })).toBeInTheDocument()
+    expect(screen.getByRole('option', { name: 'TERMINATION OF SERVICE' })).toBeInTheDocument()
+    expect(screen.getByRole('option', { name: 'OTHERS' })).toBeInTheDocument()
+    await user.keyboard('{Escape}')
+
+    await user.click(screen.getByRole('combobox', { name: /Type of service/i }))
+    expect(await screen.findByRole('option', { name: 'REL' })).toBeInTheDocument()
+    expect(screen.getByRole('option', { name: 'RECYCLING' })).toBeInTheDocument()
+    await user.keyboard('{Escape}')
+
+    await user.click(screen.getByRole('combobox', { name: /Service frequency/i }))
+    expect(await screen.findByRole('option', { name: 'Twice Weeky' })).toBeInTheDocument()
+    expect(screen.getByRole('option', { name: 'Once-A-Month' })).toBeInTheDocument()
+    await user.keyboard('{Escape}')
+
+    await user.click(screen.getByRole('combobox', { name: /Bin type/i }))
+    expect(await screen.findByRole('option', { name: 'Smart Weighing Scale' })).toBeInTheDocument()
+    expect(screen.getByRole('option', { name: '660L Recycling' })).toBeInTheDocument()
+    await user.keyboard('{Escape}')
+
+    await user.click(screen.getByRole('button', { name: /Add service line/i }))
+    expect(screen.getByText('Service line 2')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /Remove service line 2/i }))
+    expect(screen.queryByText('Service line 2')).not.toBeInTheDocument()
+  }, 10000)
+
+  it('requires core Excel SNF fields before submitting a mock request', async () => {
+    const user = userEvent.setup()
+    const { default: App } = await import('./App')
+
+    render(<App />)
+
+    await screen.findByRole('heading', { name: 'Create Service Order' })
+    await user.click(screen.getByRole('button', { name: /SNF Mock/i }))
+    await screen.findByRole('heading', { name: 'Create SNF' })
+
+    await user.clear(screen.getByLabelText(/Company/i))
+    expect(screen.getByRole('button', { name: /Submit SNF/i })).toBeDisabled()
+
+    await user.type(screen.getByLabelText(/Company/i), "L'occitane Singapore Pte Ltd")
+    await user.clear(screen.getByLabelText(/Contact no/i))
+    await user.type(screen.getByLabelText(/Contact no/i), '9123 4567')
+    await user.clear(screen.getByLabelText(/No\. of bins/i))
+    await user.type(screen.getByLabelText(/No\. of bins/i), '1')
+
+    const submitButton = screen.getByRole('button', { name: /Submit SNF/i })
+    expect(submitButton).toBeEnabled()
+    await user.click(submitButton)
+
+    expect(screen.getAllByText("L'occitane Singapore Pte Ltd").length).toBeGreaterThan(0)
+    expect(screen.getByText(/RECYCLING - One Time - 1 x 660L Recycling/i)).toBeInTheDocument()
+  }, 10000)
 })

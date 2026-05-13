@@ -1388,6 +1388,95 @@
 .cora-snf-service-details { min-height: 130px; }
 .cora-snf-foot-note { color: var(--tx-muted); font-size: 0.78rem; line-height: 1.4; }
 
+.cora-mindef-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(280px, 0.9fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.cora-mindef-card,
+.cora-mindef-summary-card {
+  min-width: 0;
+}
+
+.cora-mindef-scale {
+  max-width: 620px;
+}
+
+.cora-mindef-success {
+  padding: 18px 0 0;
+}
+
+.cora-mindef-summary {
+  display: grid;
+  gap: 10px;
+  width: 100%;
+  max-width: 520px;
+  margin-top: 14px;
+}
+
+.cora-mindef-summary p {
+  display: grid;
+  grid-template-columns: 110px minmax(0, 1fr);
+  gap: 12px;
+  margin: 0;
+  color: var(--tx-secondary);
+  font-size: 0.86rem;
+}
+
+.cora-mindef-summary strong {
+  color: var(--tx-muted);
+  font-family: var(--f-display);
+  font-size: 0.72rem;
+  font-weight: 400;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+
+.cora-snf-service-lines {
+  display: grid;
+  gap: 14px;
+}
+
+.cora-snf-service-line {
+  display: grid;
+  gap: 14px;
+  padding: 14px;
+  border: 1px solid var(--b1);
+  background: var(--s2);
+}
+
+.cora-snf-service-line-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.cora-snf-service-line-head strong {
+  color: var(--tx-secondary);
+  font-family: var(--f-display);
+  font-size: 0.72rem;
+  font-weight: 400;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+
+.cora-snf-service-line-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.cora-snf-report-switches {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  min-height: 44px;
+}
+
 .cora-snf-request-list {
   display: grid;
   gap: 0;
@@ -1528,6 +1617,9 @@
   .cora-snf-metrics { grid-template-columns: 1fr; }
   .cora-snf-request { grid-template-columns: 1fr; }
   .cora-snf-status { max-width: 100%; justify-self: start; }
+  .cora-mindef-layout { grid-template-columns: 1fr; }
+  .cora-snf-service-line-grid { grid-template-columns: 1fr; }
+  .cora-mindef-summary p { grid-template-columns: 1fr; gap: 2px; }
   .cora-snf-summary p { grid-template-columns: 1fr; gap: 2px; }
 }
 
