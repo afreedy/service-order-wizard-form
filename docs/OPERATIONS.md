@@ -100,6 +100,10 @@ When a SharePoint list schema changes:
 
 Avoid editing generated files directly. Manual changes will be overwritten by regeneration and may hide schema drift.
 
+## Reference data imports
+
+Use the programmatic import flow in [Reference data import](REFERENCE-DATA-IMPORT.md) for drivers, vehicles, and customer rows. The import path writes through generated services, is idempotent, and returns created/updated/skipped/failed row logs.
+
 ## Troubleshooting
 
 ### Reference data does not load

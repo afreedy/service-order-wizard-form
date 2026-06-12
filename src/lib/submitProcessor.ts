@@ -19,6 +19,7 @@ export interface ProcessQueuedSubmissionResult {
   proofQueueItem?: ServiceOrderProofQueueRead
 }
 
+const PROOF_QUEUE_CONFIRM_RETRY_DELAY_MS = 150
 const delay = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms))
 
 const escapeODataString = (value: string) => value.replace(/'/g, "''")
@@ -172,10 +173,10 @@ const uploadServiceOrderProof = async (
     return { queueItem: result.data, queued: true }
   }
 
-  for (let attempt = 0; attempt < 5; attempt += 1) {
+  for (let attempt = 0; attempt < 4; attempt += 1) {
     const confirmed = await findProofQueueByOrderTitle(payload.form.Title)
     if (confirmed?.ID) return { queueItem: confirmed, queued: true }
-    await delay(400)
+    await delay(PROOF_QUEUE_CONFIRM_RETRY_DELAY_MS)
   }
 
   throw new Error('Could not confirm the proof media queue item.')

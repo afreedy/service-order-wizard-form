@@ -21,9 +21,11 @@ import { ServiceOrdersService } from './generated/services/ServiceOrdersService'
 import { preprocessImageForOcr, runWeightOcr } from './weightOcr'
 import type { CropRect } from './weightOcr'
 import type { CachedReferenceData, Form, PersistedDraft, PersistedForm, PersistedWasteLine, WasteLine } from './lib/offlineStore'
-import { clearDraft, fromStoredMediaFile, getQueueSummary, loadDraft, saveDraft, toStoredMediaFile } from './lib/offlineStore'
+import { clearDraft, fromStoredMediaFile, getQueueSummary, loadDraft, OFFLINE_STORAGE_INTERRUPTED_MESSAGE, saveDraft, toStoredMediaFile } from './lib/offlineStore'
 import { createClientSubmissionId, enqueueSubmission, processPendingQueue } from './lib/offlineQueue'
 import { readCachedReferenceData, writeCachedReferenceData } from './lib/referenceCache'
+import type { ReferenceDataImportConfig, UpsertReport } from './lib/referenceDataUpsert'
+import { upsertReferenceData } from './lib/referenceDataUpsert'
 import logoImage from './assets/cora-logo.svg?inline'
 import './App.css'
 
@@ -63,6 +65,23 @@ type AdminTab = 'customers' | 'drivers' | 'vehicles' | 'waste'
 type ProtectedDestination = { view: 'list' } | { view: 'admin'; tab: AdminTab }
 type SubmissionMode = 'draft' | 'queued'
 
+const getFriendlyErrorMessage = (error: unknown, fallback = 'Unexpected error.') => {
+  const message = error instanceof Error ? error.message : typeof error === 'string' ? error : fallback
+  const normalized = message.toLowerCase()
+  if (
+    normalized.includes('idbdatabase')
+    || normalized.includes('indexeddb')
+    || normalized.includes('database connection is closing')
+    || normalized.includes('database connection is closed')
+    || normalized.includes('invalidstateerror')
+  ) {
+    return OFFLINE_STORAGE_INTERRUPTED_MESSAGE
+  }
+  return message || fallback
+}
+
+const getFriendlyErrorText = (message: string) => getFriendlyErrorMessage(message, message)
+
 interface Toast {
   type: 'success' | 'error'
   text: string
@@ -92,6 +111,15 @@ type DeleteTarget =
   | { tab: 'drivers'; id: number; name: string }
   | { tab: 'vehicles'; id: number; name: string }
   | { tab: 'waste'; id: number; name: string }
+
+declare global {
+  interface Window {
+    coraReferenceData?: {
+      upsertReferenceData: (config: ReferenceDataImportConfig) => Promise<Record<string, UpsertReport>>
+    }
+  }
+}
+
 type CustomerLevelField =
   | 'CustomerName'
   | 'CustomerLocation'
@@ -3144,9 +3172,13 @@ function App() {
   const [queueSyncing, setQueueSyncing] = useState(false)
 
   const refreshQueueState = useCallback(async () => {
-    const summary = await getQueueSummary()
-    setQueuePendingCount(summary.pendingCount)
-    setQueueLastError(summary.lastError)
+    try {
+      const summary = await getQueueSummary()
+      setQueuePendingCount(summary.pendingCount)
+      setQueueLastError(summary.lastError ? getFriendlyErrorText(summary.lastError) : '')
+    } catch (error) {
+      setQueueLastError(getFriendlyErrorMessage(error, 'Could not read the offline queue.'))
+    }
   }, [])
 
   const syncQueuedSubmissions = useCallback(async () => {
@@ -3172,12 +3204,14 @@ function App() {
           }
         },
         onSubmissionFailed: (_, error) => {
-          setToast({ type: 'error', text: error })
+          setToast({ type: 'error', text: getFriendlyErrorText(error) })
         },
         onQueueUpdated: () => {
           void refreshQueueState()
         },
       })
+    } catch (error) {
+      setToast({ type: 'error', text: getFriendlyErrorMessage(error, 'Could not sync the queued submissions.') })
     } finally {
       setQueueSyncing(false)
       await refreshQueueState()
@@ -3398,6 +3432,25 @@ function App() {
     if (view === 'admin' && (!isAdmin || !adminUnlocked)) setView('form')
     if (view === 'list' && (!isAdmin || !adminUnlocked)) setView('form')
   }, [adminUnlocked, isAdmin, view])
+
+  useEffect(() => {
+    if (!isAdmin || !adminUnlocked) {
+      delete window.coraReferenceData
+      return
+    }
+
+    window.coraReferenceData = {
+      upsertReferenceData: async (config) => {
+        const report = await upsertReferenceData(config)
+        await loadReferenceData()
+        return report
+      },
+    }
+
+    return () => {
+      delete window.coraReferenceData
+    }
+  }, [adminUnlocked, isAdmin, loadReferenceData])
 
   const unlockAdmin = useCallback(() => {
     sessionStorage.setItem(ADMIN_UNLOCK_STORAGE_KEY, 'true')
@@ -3889,7 +3942,7 @@ function App() {
         setToast({ type: 'success', text: `Order "${queuedSubmission.orderTitle}" saved offline and queued for sync.` })
       }
     } catch (e) {
-      setToast({ type: 'error', text: e instanceof Error ? e.message : 'Unexpected error.' })
+      setToast({ type: 'error', text: getFriendlyErrorMessage(e) })
     } finally {
       setSubmitting(false)
     }

@@ -19,6 +19,7 @@ const enqueueSubmission = vi.fn()
 const processPendingQueue = vi.fn()
 const readCachedReferenceData = vi.fn()
 const writeCachedReferenceData = vi.fn()
+const offlineStorageInterruptedMessage = 'The app’s offline storage was interrupted. Please close and reopen the app, then tap Retry Sync or submit again only if the order is not already in Order History.'
 
 vi.mock('@microsoft/power-apps/app', () => ({
   getContext,
@@ -49,6 +50,7 @@ vi.mock('./lib/offlineStore', () => ({
   fromStoredMediaFile,
   getQueueSummary,
   loadDraft,
+  OFFLINE_STORAGE_INTERRUPTED_MESSAGE: offlineStorageInterruptedMessage,
   saveDraft,
   toStoredMediaFile,
 }))
@@ -129,6 +131,22 @@ describe('App', () => {
       expect(screen.getByText(/Using cached reference data/)).toBeInTheDocument()
     })
     expect(screen.queryByText('Reference Data Unavailable')).not.toBeInTheDocument()
+  })
+
+  it('shows a friendly offline storage message instead of raw IndexedDB errors', async () => {
+    getQueueSummary.mockResolvedValue({
+      pendingCount: 1,
+      lastError: "Failed to execute 'transaction' on 'IDBDatabase': The database connection is closing",
+    })
+    const { default: App } = await import('./App')
+
+    render(<App />)
+
+    await screen.findByRole('heading', { name: 'Create Service Order' })
+    await waitFor(() => {
+      expect(screen.getByText(/The app’s offline storage was interrupted/)).toBeInTheDocument()
+    })
+    expect(screen.queryByText(/IDBDatabase/)).not.toBeInTheDocument()
   })
 
   it('searches customer hierarchy paths and fills all customer fields from the selected row', async () => {

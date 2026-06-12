@@ -1,0 +1,37 @@
+{
+  "drivers": [
+    "HISHAM",
+    "SAMUDI",
+    "Mohd Rafiq",
+    "Ai Yi Song",
+    "SORHONA",
+    "JAHIS",
+    "IDROS",
+    "ABG ROZAIMI"
+  ],
+  "vehicles": [
+    "YR7210 Z",
+    "YR5709 R",
+    "YQ1285 C",
+    "YR276 E",
+    "YP2288T",
+    "YQ1014T",
+    "GBJ8799A",
+    "GBJ 8775T",
+    "XD8641 S"
+  ],
+  "customers": [
+    {
+      "Title": "Example customer name from Level 1",
+      "field_1": "Example Level 2 or location",
+      "field_2": "Example Level 3 or sub-location",
+      "field_3": "Optional customer type or next hierarchy level",
+      "field_4": "Optional address",
+      "field_5": "Optional status",
+      "field_6": "",
+      "field_7": "",
+      "field_8": "",
+      "field_9": ""
+    }
+  ]
+}

@@ -112,8 +112,36 @@ const QUEUE_STORE = 'submissionQueue'
 const CACHE_STORE = 'referenceCache'
 
 let openPromise: Promise<IDBDatabase> | null = null
+let dbInstance: IDBDatabase | null = null
+
+export const OFFLINE_STORAGE_INTERRUPTED_MESSAGE = 'The app’s offline storage was interrupted. Please close and reopen the app, then tap Retry Sync or submit again only if the order is not already in Order History.'
+
+export class OfflineStorageInterruptedError extends Error {
+  constructor(cause?: unknown) {
+    super(OFFLINE_STORAGE_INTERRUPTED_MESSAGE)
+    this.name = 'OfflineStorageInterruptedError'
+    this.cause = cause
+  }
+}
+
+export const resetDatabaseConnection = () => {
+  dbInstance = null
+  openPromise = null
+}
+
+const isClosingDatabaseError = (error: unknown) => {
+  if (!error) return false
+  const name = error instanceof DOMException || error instanceof Error ? error.name : ''
+  const message = error instanceof DOMException || error instanceof Error ? error.message : String(error)
+  const normalizedMessage = message.toLowerCase()
+  return name === 'InvalidStateError'
+    || normalizedMessage.includes('closing')
+    || normalizedMessage.includes('closed')
+}
 
 const openDatabase = () => {
+  if (dbInstance) return Promise.resolve(dbInstance)
+
   openPromise ??= new Promise<IDBDatabase>((resolve, reject) => {
     const request = window.indexedDB.open(DB_NAME, DB_VERSION)
 
@@ -132,8 +160,24 @@ const openDatabase = () => {
       }
     }
 
-    request.onsuccess = () => resolve(request.result)
-    request.onerror = () => reject(request.error ?? new Error('Could not open offline storage.'))
+    request.onsuccess = () => {
+      const db = request.result
+      dbInstance = db
+      ;(db as IDBDatabase & { onclose?: (() => void) | null }).onclose = resetDatabaseConnection
+      db.onversionchange = () => {
+        db.close()
+        resetDatabaseConnection()
+      }
+      resolve(db)
+    }
+    request.onerror = () => {
+      resetDatabaseConnection()
+      reject(request.error ?? new Error('Could not open offline storage.'))
+    }
+    request.onblocked = () => {
+      resetDatabaseConnection()
+      reject(new Error('Could not open offline storage because another app tab is blocking the database upgrade.'))
+    }
   })
 
   return openPromise
@@ -144,18 +188,37 @@ const withStore = async <T>(
   mode: IDBTransactionMode,
   action: (store: IDBObjectStore) => Promise<T>,
 ) => {
-  const db = await openDatabase()
-  const transaction = db.transaction(storeName, mode)
-  const store = transaction.objectStore(storeName)
-  const result = await action(store)
+  const run = async () => {
+    const db = await openDatabase()
+    const transaction = db.transaction(storeName, mode)
+    const store = transaction.objectStore(storeName)
+    const result = await action(store)
 
-  await new Promise<void>((resolve, reject) => {
-    transaction.oncomplete = () => resolve()
-    transaction.onabort = () => reject(transaction.error ?? new Error('IndexedDB transaction aborted.'))
-    transaction.onerror = () => reject(transaction.error ?? new Error('IndexedDB transaction failed.'))
-  })
+    await new Promise<void>((resolve, reject) => {
+      transaction.oncomplete = () => resolve()
+      transaction.onabort = () => reject(transaction.error ?? new Error('IndexedDB transaction aborted.'))
+      transaction.onerror = () => reject(transaction.error ?? new Error('IndexedDB transaction failed.'))
+    })
 
-  return result
+    return result
+  }
+
+  try {
+    return await run()
+  } catch (error) {
+    if (!isClosingDatabaseError(error)) throw error
+    resetDatabaseConnection()
+  }
+
+  try {
+    return await run()
+  } catch (error) {
+    if (isClosingDatabaseError(error)) {
+      resetDatabaseConnection()
+      throw new OfflineStorageInterruptedError(error)
+    }
+    throw error
+  }
 }
 
 const wrapRequest = <T>(request: IDBRequest<T>) =>

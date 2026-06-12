@@ -118,6 +118,7 @@ Start here:
 - [Data model](docs/DATA-MODEL.md)
 - [Operations](docs/OPERATIONS.md)
 - [Power Apps OCR integration](docs/POWER-APPS-OCR.md)
+- [Reference data import](docs/REFERENCE-DATA-IMPORT.md)
 
 ## Admin access
 

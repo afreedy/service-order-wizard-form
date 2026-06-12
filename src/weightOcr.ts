@@ -59,6 +59,14 @@ const MIN_RELIABLE_SCORE = 120
 const MIN_RELIABLE_CONFIDENCE = 70
 const MIN_SCORE_MARGIN = 12
 
+const yieldToMainThread = () => new Promise<void>((resolve) => {
+  if ('requestIdleCallback' in window) {
+    window.requestIdleCallback(() => resolve(), { timeout: 50 })
+    return
+  }
+  globalThis.setTimeout(resolve, 0)
+})
+
 interface Bbox {
   left: number
   top: number
@@ -495,6 +503,7 @@ const imageDataToUrl = (imageData: ImageData, options: ImageVariantOptions) => {
 
 export const preprocessImageForOcr = async (source: File | string, cropRect?: CropRect): Promise<OcrPreprocessResult> => {
   const image = await loadImageSource(source)
+  await yieldToMainThread()
   const upscale = Math.max(1, MIN_OCR_WIDTH / image.naturalWidth)
   const downscale = MAX_OCR_WIDTH / image.naturalWidth
   const scale = Math.min(upscale, downscale)
@@ -520,6 +529,7 @@ export const preprocessImageForOcr = async (source: File | string, cropRect?: Cr
   }
 
   const selectedCrop = cropImageData(imageData, selectedBbox)
+  await yieldToMainThread()
   const sevenSegmentText = recognizeSevenSegmentText(selectedCrop)
   const imageDataVariants = cropRect
     ? [selectedCrop]
@@ -531,10 +541,10 @@ export const preprocessImageForOcr = async (source: File | string, cropRect?: Cr
   return {
     candidateTexts: sevenSegmentText ? [sevenSegmentText] : [],
     imageDataUrls: imageDataVariants.flatMap((variant) => [
-    imageDataToUrl(variant, { mode: 'invertedBinary', dilateDark: true, whiteBorder: true }),
-    imageDataToUrl(variant, { mode: 'invertedBinary', whiteBorder: true }),
-    imageDataToUrl(variant, { mode: 'binary', whiteBorder: true }),
-    imageDataToUrl(variant, { mode: 'gray', whiteBorder: true }),
+      imageDataToUrl(variant, { mode: 'invertedBinary', dilateDark: true, whiteBorder: true }),
+      imageDataToUrl(variant, { mode: 'invertedBinary', whiteBorder: true }),
+      imageDataToUrl(variant, { mode: 'binary', whiteBorder: true }),
+      imageDataToUrl(variant, { mode: 'gray', whiteBorder: true }),
     ]),
     cropPreviewUrl: imageDataToPreviewUrl(selectedCrop),
     cropRect: bboxToCropRect(selectedBbox, width, height),
